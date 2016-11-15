@@ -11,5 +11,8 @@ func main() {
 	router := violetear.New()
 	router.LogRequests = true
 	router.Handle("*", http.StripPrefix("/", http.FileServer(http.Dir("."))))
-	log.Fatal(http.ListenAndServe(":8000", router))
+	err := http.ListenAndServeTLS(":8000", "server.pem", "server.key", router)
+	if err != nil {
+		log.Fatal("ListenAndServe: ", err)
+	}
 }
