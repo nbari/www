@@ -1,7 +1,7 @@
 .PHONY: all get test clean build cover compile goxc bintray
 
 GO ?= go
-BIN_NAME=static
+BIN_NAME=www
 GO_XC = ${GOPATH}/bin/goxc -os="freebsd openbsd netbsd darwin linux windows"
 GOXC_FILE = .goxc.json
 GOXC_FILE_LOCAL = .goxc.local.json
@@ -14,7 +14,7 @@ get:
 
 build: get
 	${GO} get -u github.com/nbari/violetear
-	${GO} build -ldflags "-X main.version=${VERSION}" -o ${BIN_NAME} cmd/static/main.go;
+	${GO} build -ldflags "-X main.version=${VERSION}" -o ${BIN_NAME} cmd/www/main.go;
 
 clean:
 	@rm -rf ${BIN_NAME} ${BIN_NAME}.debug *.out build debian
@@ -31,14 +31,14 @@ compile: goxc
 
 goxc:
 	$(shell echo '{\n  "ConfigVersion": "0.9",' > $(GOXC_FILE))
-	$(shell echo '  "AppName": "static",' >> $(GOXC_FILE))
+	$(shell echo '  "AppName": "www",' >> $(GOXC_FILE))
 	$(shell echo '  "ArtifactsDest": "build",' >> $(GOXC_FILE))
 	$(shell echo '  "PackageVersion": "${VERSION}",' >> $(GOXC_FILE))
 	$(shell echo '  "TaskSettings": {' >> $(GOXC_FILE))
 	$(shell echo '    "bintray": {' >> $(GOXC_FILE))
 	$(shell echo '      "downloadspage": "bintray.md",' >> $(GOXC_FILE))
-	$(shell echo '      "package": "static",' >> $(GOXC_FILE))
-	$(shell echo '      "repository": "static",' >> $(GOXC_FILE))
+	$(shell echo '      "package": "www",' >> $(GOXC_FILE))
+	$(shell echo '      "repository": "www",' >> $(GOXC_FILE))
 	$(shell echo '      "subject": "nbari"' >> $(GOXC_FILE))
 	$(shell echo '    }\n  },' >> $(GOXC_FILE))
 	$(shell echo '  "BuildSettings": {' >> $(GOXC_FILE))
