@@ -32,7 +32,7 @@ func main() {
 
 	// start web server
 	router := violetear.New()
-	router.Verbose = !*s
+	router.Verbose = false
 	router.LogRequests = !*s
 	router.Handle("*",
 		http.StripPrefix("/",
