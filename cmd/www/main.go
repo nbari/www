@@ -40,6 +40,11 @@ func main() {
 		),
 	)
 
+	// print port
+	if !*s {
+		log.Printf("Listening on port: %d\n", *p)
+	}
+
 	// enable ssl
 	if *ssl {
 		err := www.CreateSSL("/tmp")
