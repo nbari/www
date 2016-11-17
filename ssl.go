@@ -8,17 +8,12 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
-	"os/user"
 	"path"
 	"time"
 )
 
-func CreateSSL() error {
-	usr, err := user.Current()
-	if err != nil {
-		return err
-	}
-
+// CreateSSL creates certificate and public key
+func CreateSSL(p string) error {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 
@@ -33,7 +28,7 @@ func CreateSSL() error {
 			Organization: []string{"localhost"},
 		},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(3, 0, 0),
+		NotAfter:    time.Now().AddDate(1, 0, 0),
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:    []string{"localhost", host},
@@ -54,7 +49,7 @@ func CreateSSL() error {
 	}
 
 	// create ~/.www.pem
-	pemFile, err := os.Create(path.Join(usr.HomeDir, ".www.pem"))
+	pemFile, err := os.Create(path.Join(p, ".www.pem"))
 	if err != nil {
 		return err
 	}
@@ -62,7 +57,7 @@ func CreateSSL() error {
 	pemFile.Close()
 
 	// create ~/.www.key
-	keyFile, err := os.Create(path.Join(usr.HomeDir, ".www.key"))
+	keyFile, err := os.Create(path.Join(p, ".www.key"))
 	if err != nil {
 		return err
 	}
