@@ -40,3 +40,7 @@ The option ``-ssl`` will crate a temporary certificate stored on the
 ``/tmp/.www.key`` and ``/tmp/.www.pem``
 
 When using the ``-ssl`` use ``https`` option on the browser.
+
+Example using ssl and document root on port 8080:
+
+    $ www -ssl -r /tmp -p 8080
