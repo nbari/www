@@ -13,7 +13,7 @@ import (
 )
 
 // CreateSSL creates certificate and public key
-func CreateSSL(p string) error {
+func CreateSSL(certPath string) error {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 
@@ -49,7 +49,7 @@ func CreateSSL(p string) error {
 	}
 
 	// create ~/.www.pem
-	pemFile, err := os.Create(path.Join(p, ".www.pem"))
+	pemFile, err := os.Create(path.Join(certPath, ".www.pem"))
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func CreateSSL(p string) error {
 	pemFile.Close()
 
 	// create ~/.www.key
-	keyFile, err := os.Create(path.Join(p, ".www.key"))
+	keyFile, err := os.Create(path.Join(certPath, ".www.key"))
 	if err != nil {
 		return err
 	}

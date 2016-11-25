@@ -17,8 +17,8 @@ var version string
 func main() {
 	var (
 		p   = flag.Int("p", 8000, "Listen on `port`")
+		q   = flag.Bool("q", false, "`quiet` mode")
 		r   = flag.String("r", ".", "Document `root` path")
-		s   = flag.Bool("s", false, "`silent` or quiet mode")
 		ssl = flag.Bool("ssl", false, "Enable `SSL` https://")
 		v   = flag.Bool("v", false, fmt.Sprintf("Print version: %s", version))
 	)
@@ -33,7 +33,7 @@ func main() {
 	// start web server
 	router := violetear.New()
 	router.Verbose = false
-	router.LogRequests = !*s
+	router.LogRequests = !*q
 	router.Handle("*",
 		http.StripPrefix("/",
 			http.FileServer(http.Dir(*r)),
@@ -41,7 +41,7 @@ func main() {
 	)
 
 	// print port
-	if !*s {
+	if !*q {
 		log.Printf("Listening on port: %d\n", *p)
 	}
 
