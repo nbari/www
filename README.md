@@ -5,13 +5,17 @@ Static web server
  [ ![Download](https://api.bintray.com/packages/nbari/www/www/images/download.svg) ](https://bintray.com/nbari/www/www/_latestVersion)
  [![Go Report Card](https://goreportcard.com/badge/github.com/nbari/www)](https://goreportcard.com/report/github.com/nbari/www)
 
-Install on mac:
+## Install on mac:
 
     $ brew tap nbari/homebrew-www
 
 next
 
     $ brew install www
+
+## Install on FreeBSD:
+
+    $ pkg install go-www
 
 
 # Why ?
