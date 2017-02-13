@@ -15,6 +15,12 @@ next
 
 ## Install on FreeBSD:
 
+To install the port:
+
+    $ cd /usr/ports/www/go-www/ && make install clean
+
+To add the package:
+
     $ pkg install go-www
 
 
