@@ -2,7 +2,7 @@
 
 Static web server
 
- [ ![Download](https://api.bintray.com/packages/nbari/www/www/images/download.svg) ](https://bintray.com/nbari/www/www/_latestVersion)
+ [ ![Download](https://api.bintray.com/packages/nbari/www/www/images/download.svg) ](https://dl.bintray.com/nbari/www/)
  [![Go Report Card](https://goreportcard.com/badge/github.com/nbari/www)](https://goreportcard.com/report/github.com/nbari/www)
 
 ## Install on mac:
