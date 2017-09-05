@@ -48,16 +48,16 @@ func CreateSSL(certPath string) error {
 		return err
 	}
 
-	// create ~/.www.pem
-	pemFile, err := os.Create(path.Join(certPath, ".www.pem"))
+	// create /tmp/.www.pem
+	pemFile, err := os.OpenFile(path.Join(certPath, ".www.pem"), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0400)
 	if err != nil {
 		return err
 	}
 	pem.Encode(pemFile, &pem.Block{Type: "CERTIFICATE", Bytes: crt})
 	pemFile.Close()
 
-	// create ~/.www.key
-	keyFile, err := os.Create(path.Join(certPath, ".www.key"))
+	// create /tmp/.www.key
+	keyFile, err := os.OpenFile(path.Join(certPath, ".www.key"), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0400)
 	if err != nil {
 		return err
 	}
