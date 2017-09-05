@@ -11,9 +11,9 @@ all: clean build
 
 get:
 	${GO} get
+	${GO} get -u github.com/nbari/violetear
 
 build: get
-	${GO} get -u github.com/nbari/violetear
 	${GO} build -ldflags "-X main.version=${VERSION}" -o ${BIN_NAME} cmd/www/main.go;
 
 clean:

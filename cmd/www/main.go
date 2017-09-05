@@ -49,7 +49,7 @@ func main() {
 	if *ssl {
 		err := www.CreateSSL("/tmp")
 		if err != nil {
-			fmt.Println(err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		log.Fatal(http.ListenAndServeTLS(
