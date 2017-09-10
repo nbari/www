@@ -1,4 +1,4 @@
-.PHONY: all get test clean build cover compile goxc bintray
+.PHONY: all test clean build cover compile goxc bintray
 
 GO ?= go
 BIN_NAME=www
