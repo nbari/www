@@ -41,13 +41,12 @@ func www(root string, quiet bool) http.Handler {
 }
 
 func createSSL() ([]byte, []byte, error) {
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	host, err := os.Hostname()
 	if err != nil {
 		return nil, nil, err
 	}
 	template := x509.Certificate{
-		SerialNumber: serialNumber,
+		SerialNumber: big.NewInt(time.Now().Unix()),
 		Subject:      pkix.Name{Organization: []string{"localhost"}},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().AddDate(1, 0, 0),
@@ -89,11 +88,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		config := &tls.Config{Certificates: make([]tls.Certificate, 1)}
-		if config.Certificates[0], err = tls.X509KeyPair(certPEMBlock, keyPEMBlock); err != nil {
+		srv.TLSConfig = &tls.Config{Certificates: make([]tls.Certificate, 1)}
+		if srv.TLSConfig.Certificates[0], err = tls.X509KeyPair(certPEMBlock, keyPEMBlock); err != nil {
 			log.Fatal(err)
 		}
-		srv.TLSConfig = config
 		log.Fatal(srv.ListenAndServeTLS("", ""))
 	}
 	log.Fatal(srv.ListenAndServe())
