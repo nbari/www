@@ -9,17 +9,13 @@ VERSION=$(shell git describe --tags --always)
 
 all: clean build
 
-get:
-	${GO} get
-	${GO} get -u github.com/nbari/violetear
-
-build: get
-	${GO} build -ldflags "-X main.version=${VERSION}" -o ${BIN_NAME} cmd/www/main.go;
+build:
+	${GO} build -ldflags "-s -w -X main.version=${VERSION}";
 
 clean:
 	@rm -rf ${BIN_NAME} ${BIN_NAME}.debug *.out build debian
 
-test: get
+test:
 	${GO} test -race -v
 
 cover:
