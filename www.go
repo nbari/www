@@ -76,9 +76,6 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	if !*q {
-		log.Printf("Listening on port: %d\n", *p)
-	}
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *p), Handler: www(*r, *q)}
 	if *s == "" {
 		log.Fatal(srv.ListenAndServe())
@@ -92,7 +89,10 @@ func main() {
 			log.Fatal(err)
 		}
 	} else {
-		m := autocert.Manager{Prompt: autocert.AcceptTOS, HostPolicy: autocert.HostWhitelist(*s), Cache: autocert.DirCache("/tmp/.certs")}
+		m := autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(*s),
+			Cache:      autocert.DirCache("/tmp/.certs")}
 		srv.Addr = ":https"
 		srv.TLSConfig = &tls.Config{GetCertificate: m.GetCertificate}
 	}
