@@ -13,8 +13,9 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"os"
 	"time"
+
+	"golang.org/x/crypto/acme/autocert"
 )
 
 var version string
@@ -41,10 +42,6 @@ func www(root string, quiet bool) http.Handler {
 }
 
 func createSSL() ([]byte, []byte, error) {
-	host, err := os.Hostname()
-	if err != nil {
-		return nil, nil, err
-	}
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().Unix()),
 		Subject:      pkix.Name{Organization: []string{"localhost"}},
@@ -52,7 +49,7 @@ func createSSL() ([]byte, []byte, error) {
 		NotAfter:     time.Now().AddDate(1, 0, 0),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost", host},
+		DNSNames:     []string{"localhost"},
 	}
 	privatekey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -72,18 +69,20 @@ func main() {
 	p := flag.Int("p", 8000, "Listen on `port`")
 	q := flag.Bool("q", false, "`quiet` mode")
 	r := flag.String("r", ".", "Document `root` path")
-	ssl := flag.Bool("ssl", false, "Enable `SSL` https://")
+	s := flag.String("s", "", "https://`your-domain.tld` if \"localhost\", port can be other than 443")
 	v := flag.Bool("v", false, fmt.Sprintf("Print version: %s", version))
 	flag.Parse()
 	if *v {
 		fmt.Println(version)
-		os.Exit(0)
+		return
 	}
 	if !*q {
 		log.Printf("Listening on port: %d\n", *p)
 	}
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *p), Handler: www(*r, *q)}
-	if *ssl {
+	if *s == "" {
+		log.Fatal(srv.ListenAndServe())
+	} else if *s == "localhost" {
 		certPEMBlock, keyPEMBlock, err := createSSL()
 		if err != nil {
 			log.Fatal(err)
@@ -92,7 +91,10 @@ func main() {
 		if srv.TLSConfig.Certificates[0], err = tls.X509KeyPair(certPEMBlock, keyPEMBlock); err != nil {
 			log.Fatal(err)
 		}
-		log.Fatal(srv.ListenAndServeTLS("", ""))
+	} else {
+		m := autocert.Manager{Prompt: autocert.AcceptTOS, HostPolicy: autocert.HostWhitelist(*s), Cache: autocert.DirCache("/tmp/.certs")}
+		srv.Addr = ":https"
+		srv.TLSConfig = &tls.Config{GetCertificate: m.GetCertificate}
 	}
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(srv.ListenAndServeTLS("", ""))
 }
