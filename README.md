@@ -42,15 +42,14 @@ By default  **www** listen on port 8000, this can be changed by using the ``-p``
     $ www -p 80 (may need root privilages)
 
 
-If SSL is required use the option ``-ssl``, example:
+If TLS is required use the option `-s` and a domain name, for example:
 
-    $ www -p 443 -ssl
+    $ www -s example.com
 
-The option ``-ssl`` will crate a temporary certificate stored on the
-``/tmp/.www.key`` and ``/tmp/.www.pem``
+This will try to get a valid certificate by using letsencrypt but the port will always be 443
 
-When using the ``-ssl`` use ``https`` option on the browser.
+When using the ``-s`` use ``https`` option on the browser.
 
-Example using ssl and document root on port 8080:
+Example using tls and document root on port 8080:
 
-    $ www -ssl -r /tmp -p 8080
+    $ www -s localhost -r /tmp -p 8080
