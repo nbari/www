@@ -18,8 +18,6 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 )
 
-var version string
-
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -70,16 +68,9 @@ func main() {
 	q := flag.Bool("q", false, "`quiet` mode")
 	r := flag.String("r", ".", "Document `root` path")
 	s := flag.String("s", "", "https://`your-domain.tld` if \"localhost\", port can be other than 443")
-	v := flag.Bool("v", false, fmt.Sprintf("Print version: %s", version))
 	flag.Parse()
-	if *v {
-		fmt.Println(version)
-		return
-	}
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *p), Handler: www(*r, *q)}
-	if *s == "" {
-		log.Fatal(srv.ListenAndServe())
-	} else if *s == "localhost" {
+	if *s == "localhost" {
 		certPEMBlock, keyPEMBlock, err := createSSL()
 		if err != nil {
 			log.Fatal(err)
@@ -88,13 +79,19 @@ func main() {
 		if srv.TLSConfig.Certificates[0], err = tls.X509KeyPair(certPEMBlock, keyPEMBlock); err != nil {
 			log.Fatal(err)
 		}
-	} else {
+	} else if *s != "" {
 		m := autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(*s),
 			Cache:      autocert.DirCache("/tmp/.certs")}
-		srv.Addr = ":https"
+		srv.Addr = ":443"
 		srv.TLSConfig = &tls.Config{GetCertificate: m.GetCertificate}
+	}
+	if !*q {
+		log.Printf("Listening on *%s\n", srv.Addr)
+	}
+	if *s == "" {
+		log.Fatal(srv.ListenAndServe())
 	}
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }

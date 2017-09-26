@@ -10,18 +10,10 @@ VERSION=$(shell git describe --tags --always)
 all: clean build
 
 build:
-	${GO} build -ldflags "-s -w -X main.version=${VERSION}";
+	${GO} build -ldflags "-s -w";
 
 clean:
 	@rm -rf ${BIN_NAME} ${BIN_NAME}.debug *.out build debian
-
-test:
-	${GO} test -race -v
-
-cover:
-	${GO} test -cover && \
-	${GO} test -coverprofile=coverage.out  && \
-	${GO} tool cover -html=coverage.out
 
 compile: goxc
 
