@@ -8,7 +8,9 @@ go:
   - 1.9.x
   - master
 
-before_install:
+install:
+  - go get -u github.com/golang/dep/...
+  - dep ensure
   - go get github.com/axw/gocov/gocov
   - go get github.com/mattn/goveralls
   - if ! go get github.com/golang/tools/cmd/cover; then go get golang.org/x/tools/cmd/cover; fi
