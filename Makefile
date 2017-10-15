@@ -17,6 +17,12 @@ clean:
 
 compile: goxc
 
+
+cover:
+	${GO} test -cover && \
+    ${GO} test -coverprofile=coverage.out  && \
+    ${GO} tool cover -html=coverage.out
+
 goxc:
 	$(shell echo '{\n  "ConfigVersion": "0.9",' > $(GOXC_FILE))
 	$(shell echo '  "AppName": "www",' >> $(GOXC_FILE))
