@@ -3,14 +3,14 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:793a79198b755828dec284c6f1325e24e09186f1b7ba818b65c7c35104ed86eb"
+  digest = "1:dedf20eb0d3e8d6aa8a4d3d2fae248222b688ed528201995e152cc497899123c"
   name = "golang.org/x/crypto"
   packages = [
     "acme",
     "acme/autocert",
   ]
-  pruneopts = ""
-  revision = "614d502a4dac94afa3a6ce146bd1736da82514c6"
+  pruneopts = "UT"
+  revision = "e3636079e1a4c1f337f212cc5cd2aca108f6c900"
 
 [solve-meta]
   analyzer-name = "dep"

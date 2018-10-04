@@ -17,7 +17,6 @@ clean:
 
 compile: goxc
 
-
 cover:
 	${GO} test -cover && \
     ${GO} test -coverprofile=coverage.out  && \
@@ -46,3 +45,6 @@ goxc:
 
 bintray:
 	${GO_XC} bintray
+
+test:
+	${GO} test -race -v
