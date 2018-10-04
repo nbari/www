@@ -1,12 +1,37 @@
-\" Manpage for www.
+.\" Manpage for www.
 .\" To correct errors or typos please use https://github.com/nbari/www/issues
 .TH man 1 "October 2018" "www" "www man page"
 .SH NAME
 www \- static web server
 .SH SYNOPSIS
-www [options] command arguments ...
+.B www [options] command arguments ...
 .SH DESCRIPTION
-
+.B www is a web server for static content. By default it uses the current directory as the document root.
+.SH OPTIONS
+.TP
+.BR \-p " " \fIport\fR
+Listen on a specific port, default port is \fI8000\fR.
+.TP
+.BR \-q
+Suppress output from \fBwww\fR
+.TP
+.BR \-r " " \fIroot\fR
+Document root path, defaults to present working directory (".")
+.TP
+.BR \-s " " \fIyour-domain.tld\fR
+Enable TLS support with a custom domain, this will try to get a valid certificate with letsencrypt and sets default port to \fI443\fR
+.SH EXAMPLES
+.TP
+.BR \fBwww\fR " -r /tmp"
+Start \fBwww\fR serving files from \fI/tmp\fR
+.TP
+.BR \fBwww\fR " -p 80"
+Start \fBwww\fR but listening on port \fI80\fR
+.TP
+.BR \fBwww\fR " -s example.com"
+Start \fBwww\fR with TLS support enabled for the example.com domain
+.BR \fBwww\fR " -s example.com -r /tmp -p 8080"
+Start \fBwww\fR with TLS support listening on port \fI8080\fR serving files from \fI/tmp\fR
 .SH BUGS
 https://github.com/nbari/www/issues
 .SH AUTHOR
