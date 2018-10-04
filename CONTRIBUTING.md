@@ -45,8 +45,7 @@ will have advice about where to go to create issues.
 
 Try to follow these guidelines
 
-- **Avoid creating issues for implementation help**. It's much better for discoverability, SEO, and semantics - to keep the issue tracker focused on bugs and feature requests - to ask implementation-related questions on [stackoverflow.com][so]
-- **Investigate the issue**:
+- **Investigate the issue**
 - **Check the readme** - oftentimes you will find notes about creating issues, and where to go depending on the type of issue.
 - Create the issue in the appropriate repository.
 
