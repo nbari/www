@@ -6,6 +6,11 @@ Static web server
 [ ![Download](https://api.bintray.com/packages/nbari/www/www/images/download.svg) ](https://dl.bintray.com/nbari/www/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nbari/www)](https://goreportcard.com/report/github.com/nbari/www)
 
+Linux precompiled binaries
+
+[![deb](https://img.shields.io/badge/deb-packagecloud.io-844fec.svg)](https://packagecloud.io/nbari/www)
+[![rpm](https://img.shields.io/badge/rpm-packagecloud.io-844fec.svg)](https://packagecloud.io/nbari/www)
+
 ## Install on mac:
 
     $ brew tap nbari/homebrew-www
