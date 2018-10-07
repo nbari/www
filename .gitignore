@@ -4,3 +4,4 @@ coverage.out
 .goxc.json
 build
 vendor
+.envrc
