@@ -65,9 +65,9 @@ func createSSL() ([]byte, []byte, error) {
 
 func main() {
 	p := flag.Int("p", 8000, "Listen on `port`")
-	q := flag.Bool("q", false, "`quiet` mode")
-	r := flag.String("r", ".", "Document `root` path")
-	s := flag.String("s", "", "https://`your-domain.tld` if \"localhost\", port can be other than 443")
+	q := flag.Bool("q", false, "Enable `quiet` mode (no logs)")
+	r := flag.String("r", ".", "Document root `path`")
+	s := flag.String("s", "", "Use TLS, https://`your-domain.tld` if \"localhost\" a self-signed certificate will be created and port can be other than 443")
 	flag.Parse()
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *p), Handler: www(*r, *q)}
 	if *s == "localhost" {
