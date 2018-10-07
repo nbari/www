@@ -1,8 +1,0 @@
-{
- "ConfigVersion": "0.9",
- "TaskSettings": {
-  "bintray": {
-   "apikey": "9135977ffd668890113afb9fe57dab1d378a482b"
-  }
- } 
-}
