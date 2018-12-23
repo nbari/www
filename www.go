@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -42,32 +42,32 @@ func www(root string, quiet bool) http.Handler {
 func createSSL() ([]byte, []byte, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().Unix()),
-		Subject:      pkix.Name{Organization: []string{"localhost"}},
+		Subject:      pkix.Name{Organization: []string{"www"}},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().AddDate(1, 0, 0),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
 	}
-	privatekey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
-	crt, err := x509.CreateCertificate(rand.Reader, &template, &template, &privatekey.PublicKey, privatekey)
+	crt, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
 		return nil, nil, err
 	}
-	var certOut, keyOut bytes.Buffer
-	pem.Encode(&certOut, &pem.Block{Type: "CERTIFICATE", Bytes: crt})
-	pem.Encode(&keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privatekey)})
-	return certOut.Bytes(), keyOut.Bytes(), nil
+	privKey, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: crt}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privKey}), nil
 }
 
 func main() {
 	p := flag.Int("p", 8000, "Listen on `port`")
 	q := flag.Bool("q", false, "Enable `quiet` mode (no logs)")
 	r := flag.String("r", ".", "Document `root path`")
-	s := flag.String("s", "", "Use TLS, https://`your-domain.tld` if \"localhost\" a self-signed certificate will be created and port can be other than 443")
+	s := flag.String("s", "", "Use TLS, https://`your-domain.tld`, if \"localhost\" a self-signed certificate will be created and port can be other than 443")
 	flag.Parse()
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *p), Handler: www(*r, *q)}
 	if *s == "localhost" {
