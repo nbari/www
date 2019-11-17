@@ -11,11 +11,11 @@ jobs:
   test-latest: &test-template
     docker:
       - image: circleci/golang:latest
+        environment:
+          GO111MODULE: "on"
     working_directory: /go/src/github.com/nbari/www
     steps:
       - checkout
-      - run: curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
-      - run: dep ensure -vendor-only
       - run: go test -race -v
   test-1.13:
     <<: *test-template
