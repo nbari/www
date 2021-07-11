@@ -2,6 +2,7 @@
 
 Static web server
 
+[![download](https://img.shields.io/github/v/release/nbari/www)](https://github.com/nbari/www/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nbari/www)](https://goreportcard.com/report/github.com/nbari/www)
 
 Linux precompiled binaries
