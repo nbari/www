@@ -2,8 +2,6 @@
 
 Static web server
 
-[![CircleCI](https://circleci.com/gh/nbari/www.svg?style=svg)](https://circleci.com/gh/nbari/www)
-[ ![Download](https://api.bintray.com/packages/nbari/www/www/images/download.svg) ](https://dl.bintray.com/nbari/www/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nbari/www)](https://goreportcard.com/report/github.com/nbari/www)
 
 Linux precompiled binaries
