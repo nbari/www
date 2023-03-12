@@ -17,19 +17,19 @@ jobs:
           - goarch: "386"
             goos: darwin
     steps:
-    - uses: actions/checkout@v2
-    - name: set env
-      run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-    - name: Test
-      run: |
-          echo $RELEASE_VERSION
-          echo ${{ env.RELEASE_VERSION }}
+      - uses: actions/checkout@v2
+      - name: set env
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Test
+        run: |
+            echo $RELEASE_VERSION
+            echo ${{ env.RELEASE_VERSION }}
 
-    - uses: actions/checkout@v2
-    - uses: wangyoucao577/go-release-action@v1.18
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        goos: ${{ matrix.goos }}
-        goarch: ${{ matrix.goarch }}
-        binary_name: www
-        ldflags: -s -w -X main.version=${{ env.RELEASE_VERSION }}
+      - uses: actions/checkout@v3.3.0
+      - uses: wangyoucao577/go-release-action@v1.36
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          binary_name: www
+          ldflags: -s -w -X main.version=${{ env.RELEASE_VERSION }}
