@@ -38,5 +38,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
+          goversion: 1.26.0
           binary_name: www
           ldflags: -s -w -X main.version=${{ env.RELEASE_VERSION }}

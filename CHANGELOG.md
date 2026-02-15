@@ -1,3 +1,6 @@
+## 2.0.5
+* Update Go version and GitHub workflows
+
 ## 2.0.4
 * Update dependencies
 
