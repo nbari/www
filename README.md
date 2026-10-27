@@ -1,5 +1,9 @@
 # www
 
+> **Legacy / read-only reference.** This branch preserves the retired Go implementation.
+> Active development continues in the [Rust version on `main`](https://github.com/nbari/www/tree/main).
+> Go dependencies were last updated on October 27, 2026; no further Go updates are planned.
+
 Static web server
 
 [![download](https://img.shields.io/github/v/release/nbari/www)](https://github.com/nbari/www/releases)
