@@ -68,6 +68,75 @@ any time. Typically, but not exclusively, issues are closed when:
 - A discussion has clearly run its course
 
 
+## Development and Verification
+
+Development recipes live in `.justfile` and require [just](https://github.com/casey/just):
+
+```sh
+just check
+just msrv
+just acme
+just bench-check
+```
+
+- `just check` enforces `cargo fmt --all -- --check`, `just --fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`, the Rustls-only dependency check (`tls-check`), and the unit/integration/benchmark-safeguard test suites.
+- `just msrv` verifies compatibility with the minimum supported Rust version (`1.88.0`, declared in `Cargo.toml`).
+- `just acme` runs TLS-ALPN-01 issuance, idle renewal, cached restart, and CA outage recovery against an in-process Rust test CA. No external service or container runtime is required.
+- `ACME_DOMAIN=example.com ACME_INGRESS_PROBE_CMD='...' just acme-live` runs opt-in live Let's Encrypt staging verification after fail-closed public DNS (Cloudflare DoH), public IPv4/IPv6 egress matching, port 443 bindability, and external ingress nonce verification.
+
+### Local ACME coverage
+
+`tests/acme.rs` hosts a temporary Rustls HTTPS ACME API and signing CA in the test process. It verifies ES256 JWS signatures, account ownership, request URLs and single-use nonces. Before accepting an authorization, it connects to the running `www` listener with SNI and `acme-tls/1`, verifies the TLS handshake signature, and checks the self-signed challenge certificate's single DNS SAN and critical SHA-256 `acmeIdentifier` extension. Finalization checks the CSR signature and ordered identifiers before signing the requested key.
+
+The end-to-end test exercises issuance, GET/HEAD, idle renewal, certificate/account persistence, restart during a CA outage, continued HTTPS during a failed renewal, automatic recovery, and graceful shutdown. Rotation assertions use fresh TLS handshakes with pooling and session resumption disabled. Negative tests exercise malformed certificates/CSRs, missing ALPN, invalid/replayed signed requests, and finalization before or after failed validation. Separate cache and filesystem tests check permissions, isolation, atomic persistence, and symlink aliases.
+
+This is a deliberately limited test CA: it supports P-256/ES256 and `localhost` only, binds its API to loopback, and maps validation to an ephemeral loopback port instead of public TCP/443. It does not implement public DNS validation, alternate challenge types, revocation, rate limits, or the full behavior of a public CA. Public reachability and Let's Encrypt interoperability require the separate opt-in staging test below; local success does not establish those prerequisites.
+
+### Live staging verification
+
+`just acme-live` never contacts Let's Encrypt unless public ingress to port 443 on this host is proven from an independent external vantage point. Same-host or hairpin NAT probes cannot detect upstream firewall blocks or misrouted public IPs, so the test fails closed when `ACME_INGRESS_PROBE_CMD` is unset.
+
+For each public A and AAAA address resolved via Cloudflare DoH, the preflight listener binds TCP port 443 and executes `sh -c "$ACME_INGRESS_PROBE_CMD"` in a dedicated process group with a 10-second deadline and these environment variables:
+
+- `ACME_PROBE_DOMAIN`: normalized DNS name under test.
+- `ACME_PROBE_IP`: target public IPv4 or IPv6 address.
+- `ACME_PROBE_PORT`: target TCP port (`443`).
+- `ACME_PROBE_NONCE`: single-line random token (`www-acme-probe-<32-hex>`).
+
+The probe command must connect from an external host to `$ACME_PROBE_IP:$ACME_PROBE_PORT`, send `$ACME_PROBE_NONCE` followed by `\n`, verify that the exact line is echoed back unmodified (proving no TLS-terminating proxy intercepted the connection), and exit `0`:
+
+```sh
+ACME_DOMAIN=share.example.com \
+ACME_INGRESS_PROBE_CMD='ssh probe-host "printf \"%s\n\" \"$ACME_PROBE_NONCE\" | nc -w 5 \"$ACME_PROBE_IP\" \"$ACME_PROBE_PORT\" | grep -Fxq \"$ACME_PROBE_NONCE\""' \
+just acme-live
+```
+
+### Listener binding and serving policy evaluation
+
+- **Dual-stack default (`[::]:port` / `0.0.0.0:port`)**: `server::bind(port)` binds `IPV6_V6ONLY=false` on `[::]:port` with automatic fallback to `0.0.0.0:port`. Adding a `--bind` flag was evaluated and intentionally deferred: ACME TLS-ALPN-01 requires public Dual-Stack/IPv4 reachability on port 443, and keeping the CLI surface minimal (`-p`, `-r`, `-q`, `-s`, `--cert-cache`, `--acme-staging`) avoids conflicting bind/ACME states while container or firewall rules already scope interface exposure when needed.
+- **Dotfiles, symlinks, and directory listings**: Serving hidden files, following ordinary symlinks outside the document root, and generating directory listings when `index.html` is absent remain intentional defaults for compatibility. Path traversal (`..`), NUL/backslash bytes, and the active ACME certificate cache (including symlink aliases to it) are always blocked. Future strict-mode toggles (such as disabling external symlinks, dotfiles, or listings) should be introduced only if requested as a single cohesive policy rather than multiple overlapping flags.
+
+### Linux static musl packages (DEB and RPM)
+
+```sh
+just package-tools
+cargo build --release --locked --target x86_64-unknown-linux-musl
+just packages x86_64-unknown-linux-musl
+```
+
+Use `aarch64-unknown-linux-musl` on ARM64 builders. `scripts/package-linux.py` verifies ELF architecture and static linkage before generating `.deb` and `.rpm` packages in `dist/`.
+
+### FreeBSD cross-compilation
+
+To cross-build FreeBSD release binaries or test suites on Linux (requires Python 3.11+, `clang`, `tar`, and `rustup`):
+
+```sh
+python3 scripts/build-freebsd.py aarch64-unknown-freebsd
+python3 scripts/build-freebsd.py aarch64-unknown-freebsd --tests
+```
+
+Supported targets are `x86_64-unknown-freebsd`, `aarch64-unknown-freebsd`, and `i686-unknown-freebsd`. The script downloads and verifies the official FreeBSD 14.3 ABI sysroot using the Rustls-based `examples/fetch.rs` helper.
+
 ## Pull Request Process
 
 - Target **main** when opening a pull request.
@@ -101,5 +170,46 @@ For subsequent releases, update the Cargo version and lockfile, commit the chang
 CI, then push a matching tag. Manually dispatching on a matching tag also publishes; select
 `main` for validation without publication.
 
+### Homebrew tap (`nbari/homebrew-www`)
+
+The existing `nbari/homebrew-www` tap (`master:www.rb`, blob `2cd622cf086eeffe6a995dd7be15cf9cdb553e60`) still targets tag `2.0.0` (`057958f4d73629d886801dc2c24c6c0f268861ac`) with `depends_on "go" => :build` and `depends_on "dep" => :build`. Replace `www.rb` in that repository with the prebuilt Rust release archives and man page below (verified against the published `3.0.0` GitHub release `SHA256SUMS`; neither `ruby` nor `brew` is installed on this Linux builder, so validate with `brew audit --strict` / `brew test` on the tap host):
+
+```ruby
+class Www < Formula
+  desc "Simple static web server with automatic HTTPS"
+  homepage "https://github.com/nbari/www"
+  version "3.0.0"
+  license "BSD-3-Clause"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/nbari/www/releases/download/3.0.0/www-3.0.0-aarch64-apple-darwin.tar.gz"
+      sha256 "5758fe8a6e8b060fe874ac2aa1819dc2cf721683eb0569649c09108f404180e7"
+    else
+      url "https://github.com/nbari/www/releases/download/3.0.0/www-3.0.0-x86_64-apple-darwin.tar.gz"
+      sha256 "3ecfb6cc9e79a68642a08fd2dd5701720a88552fd1f84aec262eb1b0110313e1"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/nbari/www/releases/download/3.0.0/www-3.0.0-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "6430771b3eecc9234af9d8bf3d84661619c652775f175d2881e17ace8a18a5ba"
+    else
+      url "https://github.com/nbari/www/releases/download/3.0.0/www-3.0.0-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "ab2348c8220b7671cfc083150f0e5b9df1d34706d73362e55edb38c6cdd67d05"
+    end
+  end
+
+  def install
+    bin.install "www"
+    man1.install "man/www.1"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/www -V")
+  end
+end
+```
 
 [so]: http://stackoverflow.com/questions/tagged/www

@@ -168,11 +168,17 @@ async fn listing(files: &Files, path: &Path, head: bool) -> Response {
         if !allowed(files, &entry.path()).await {
             continue;
         }
-        let metadata = match tokio::fs::metadata(entry.path()).await {
-            Ok(metadata) if metadata.is_dir() || metadata.is_file() => metadata,
+        let is_dir = match entry.file_type().await {
+            Ok(kind) if kind.is_dir() => true,
+            Ok(kind) if kind.is_file() => false,
+            Ok(kind) if kind.is_symlink() => match tokio::fs::metadata(entry.path()).await {
+                Ok(metadata) if metadata.is_dir() => true,
+                Ok(metadata) if metadata.is_file() => false,
+                _ => continue,
+            },
             _ => continue,
         };
-        names.push((entry.file_name(), metadata.is_dir()));
+        names.push((entry.file_name(), is_dir));
     }
     names.sort_by(|a, b| a.0.cmp(&b.0));
     let mut html = String::from(

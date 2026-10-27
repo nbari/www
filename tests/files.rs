@@ -255,13 +255,24 @@ async fn preserve_ordinary_symlinks() -> Result<()> {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir()?;
     let external = tempfile::NamedTempFile::new()?;
+    let external_dir = tempfile::tempdir()?;
     std::fs::write(external.path(), "linked")?;
+    std::fs::write(external_dir.path().join("inside.txt"), "inside")?;
     symlink(external.path(), root.path().join("link"))?;
+    symlink(external_dir.path(), root.path().join("dir-link"))?;
+    symlink(
+        root.path().join("missing-target"),
+        root.path().join("broken-link"),
+    )?;
     let app = app(root.path()).await?;
     assert_eq!(
         text(request(&app, "GET", "/link", &[]).await?).await?,
         "linked"
     );
+    let listing = text(request(&app, "GET", "/", &[]).await?).await?;
+    assert!(listing.contains("<a href=\"./link\">link</a>"));
+    assert!(listing.contains("<a href=\"./dir-link/\">dir-link/</a>"));
+    assert!(!listing.contains("broken-link"));
     Ok(())
 }
 

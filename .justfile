@@ -4,9 +4,10 @@ default: build
 build:
     cargo build --release --locked
 
-# Run the ordinary tests; the Pebble integration test is run by acme.
+# Run ordinary unit, integration, and benchmark safeguard tests.
 test:
     cargo test --locked
+    cargo test --locked --example bench
 
 fmt:
     cargo fmt --all
@@ -31,7 +32,7 @@ tls-check:
         exit 1
     fi
 
-# Install the same Cargo packagers used by s3m, at pinned versions.
+# Install the Cargo packagers at pinned versions.
 package-tools:
     cargo install --locked --version 3.8.0 cargo-deb
     cargo install --locked --version 0.21.1 cargo-generate-rpm
@@ -44,9 +45,36 @@ packages target="x86_64-unknown-linux-musl":
 msrv:
     cargo +1.88.0 check --all-targets --locked
 
-# Requires Pebble v2.8.0 on PATH, or an absolute PEBBLE_BIN environment variable.
+# Run the in-process Rust ACME CA integration and validator tests.
 acme:
-    cargo test --locked --test acme -- --ignored --nocapture
+    cargo test --locked --test acme -- --nocapture
+
+# Opt-in live Let's Encrypt staging verification (requires ACME_DOMAIN and ACME_INGRESS_PROBE_CMD).
+acme-live:
+    cargo test --locked --test acme live_staging_issuance_and_certificate_reuse -- --ignored --exact --nocapture
+
+# Install the pinned Rustls load generator for local benchmarks.
+bench-tools:
+    cargo install --locked --version 1.16.0 --no-default-features --features rustls oha
+
+# Run local HTTP and HTTPS benchmarks (compares TCP_NODELAY enabled vs disabled by default).
+[positional-arguments]
+bench *args:
+    cargo run --locked --example bench -- "$@"
+
+# Run local HTTP benchmarks only.
+[positional-arguments]
+bench-http *args:
+    cargo run --locked --example bench -- --mode http "$@"
+
+# Run local localhost HTTPS benchmarks only.
+[positional-arguments]
+bench-https *args:
+    cargo run --locked --example bench -- --mode https "$@"
+
+# Validate benchmark error handling, fixture generation, and result aggregation without running oha.
+bench-check:
+    cargo test --locked --example bench
 
 # Install under a chosen prefix, optionally staging files under destdir.
 install prefix="/usr/local" destdir="": build

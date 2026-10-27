@@ -34,11 +34,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
+base64 = "0.22"
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
 serde_json = "1"
 tokio = { version = "1", features = ["io-util", "process", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false }
+tower = { version = "0.5", features = ["util"] }
+x509-parser = { version = "0.18", features = ["verify"] }
 
 [build-dependencies]
 built = { version = "0.8.1", default-features = false, features = ["git2"] }
