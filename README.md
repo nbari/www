@@ -13,8 +13,8 @@ www -r /tmp -p 8080
 www -q -r ./public
 ```
 
-The Rust implementation keeps the original commands and defaults, including directory listings,
-`index.html`, streamed downloads, HEAD, byte ranges, and conditional requests.
+The server supports directory listings, `index.html`, streamed downloads, HEAD, byte ranges,
+and conditional requests.
 
 ## Install
 
@@ -36,7 +36,6 @@ Linux additionally provides static musl archives and RPM/DEB packages on x86_64 
 using the same Cargo packagers as s3m. Packages install the binary under `/usr/bin`, together
 with the man page and license documentation. Release tags must match the Cargo package version.
 FreeBSD release binaries use the FreeBSD 14.3 ABI sysroot; CI runs tests in FreeBSD 14.4 VMs.
-Existing Homebrew and FreeBSD package recipes may still install the earlier Go implementation.
 
 ## Options
 
@@ -54,12 +53,10 @@ Existing Homebrew and FreeBSD package recipes may still install the earlier Go i
 | `--version` | Show the package version and full source commit hash |
 
 The server listens on all IPv4 and IPv6 interfaces when IPv6 is available. Hidden files are served,
-and ordinary symlinks are followed, including links outside the document root, as in the Go version.
+and ordinary symlinks are followed, including links outside the document root.
 Choose the directory you share accordingly. The active certificate cache and its symlink aliases
 are excluded from listings and downloads.
 
-Directory HTML, log formatting, MIME inference, and incidental HTTP details can differ from Go.
-The public commands and normal browser/download workflows remain the compatibility contract.
 Help uses the same terminal colors as cron-when. Colors are automatic and disabled for redirected
 output. Version metadata is generated with `built`; registry packages retain the source commit
 through Cargo's `.cargo_vcs_info.json`. Builds without Git or Cargo source metadata show `unknown`.
@@ -104,8 +101,8 @@ Certificate storage defaults to:
 
 Use `--cert-cache /path/to/private/acme` for a service account or persistent container volume.
 New directories use mode 0700 and cache files use 0600 on Unix. An existing directory must
-already have owner-only permissions. Cache writes are atomic. Keep this storage across restarts;
-the Rust version obtains its own certificates and does not import the older Go cache.
+already have owner-only permissions. Cache writes are atomic. Keep this storage across restarts
+to reuse ACME accounts and certificates.
 
 For a public test, start with staging:
 
@@ -128,7 +125,7 @@ just check
 just build
 ```
 
-The CLI follows [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md). Local logging uses `tracing`;
+The CLI separates argument definitions, dispatch, and serving actions. Local logging uses `tracing`;
 distributed telemetry is not part of the default application.
 Development recipes live in `.justfile` and require [just](https://github.com/casey/just).
 Use `just msrv` to check with Rust 1.88.0 after installing that toolchain.
@@ -166,12 +163,7 @@ PEBBLE_BIN="$(go env GOPATH)/bin/pebble" just acme
 
 Pebble is needed only for this integration test, which CI runs explicitly. Ordinary `just test`
 reports it as ignored. No public domain or production CA is used by the automated tests.
-
-To compare with a previously built Go binary:
-
-```sh
-python3 scripts/compare-go.py /path/to/go-www target/release/www
-```
+The Go toolchain is used only to build the external Pebble test server.
 
 To cross-build a FreeBSD release on Linux, install Python 3.11+, clang, tar, and Rust through
 rustup, then run, for example:
