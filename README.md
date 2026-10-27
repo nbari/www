@@ -1,3 +1,8 @@
+[![Test & Build](https://github.com/nbari/www/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/nbari/www/actions/workflows/build.yml?query=branch%3Amain)
+[![Security audit](https://github.com/nbari/www/actions/workflows/security-audit.yml/badge.svg?branch=main)](https://github.com/nbari/www/actions/workflows/security-audit.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/nbari/www.svg)](https://github.com/nbari/www/releases/latest)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+
 # www
 
 A simple static web server. Run `www` to share the current directory over HTTP on port 8000.
