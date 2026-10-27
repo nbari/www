@@ -1,46 +1,74 @@
-.\" Manpage for www.
-.\" To correct errors or typos please use https://github.com/nbari/www/issues
-.TH man 1 "October 2018" "www" "www man page"
+.TH WWW 1 "October 2026" "www 3.0.0" "User Commands"
 .SH NAME
-www \- static web server
+www \- simple static HTTP and HTTPS server
 .SH SYNOPSIS
-.B www [options] command arguments ...
+.B www
+.RB [ \-p " port"]
+.RB [ \-r " path"]
+.RB [ \-q ]
+.RB [ \-s " domain"]
+.RB [ \-\-cert-cache " path"]
+.RB [ \-\-acme-staging ]
 .SH DESCRIPTION
-.B www is a web server for static content. By default it uses the current directory as the document root.
+Serve the current directory on all interfaces, using HTTP port 8000 by default.
+Directories serve index.html when present, otherwise a directory listing.
+Files are streamed with HEAD, range, and conditional request support.
+Hidden files are served and ordinary symbolic links are followed.
+The active certificate cache and its aliases are excluded.
 .SH OPTIONS
 .TP
-.BR \-p " " \fIport\fR
-Listen on a specific port, default port is \fI8000\fR.
+.BI \-p " port"
+Listening port; default 8000. Domain HTTPS always uses 443.
 .TP
-.BR \-q
-Suppress output from \fBwww\fR
+.BI \-r " path"
+Document root; default the current directory.
 .TP
-.BR \-r " " \fIroot\fR
-Document root path, defaults to present working directory (".")
+.B \-q
+Suppress startup and request logs. Errors remain visible on standard error.
 .TP
-.BR \-s " " \fIyour-domain.tld\fR
-Enable TLS support with a custom domain, this will try to get a valid certificate with letsencrypt and sets default port to \fI443\fR
+.BI \-s " domain"
+Enable HTTPS. The exact name localhost creates a temporary self-signed certificate
+and respects the selected port. Other DNS names use Let's Encrypt on port 443.
+.TP
+.BI \-\-cert-cache " path"
+Override persistent ACME account and certificate storage. Requires domain HTTPS.
+An existing directory must have owner-only permissions.
+.TP
+.B \-\-acme-staging
+Use Let's Encrypt staging for testing. Requires domain HTTPS.
+Staging certificates are not publicly trusted.
+.TP
+.BR \-h ", " \-\-help
+Show help.
+.TP
+.BR \-V ", " \-\-version
+Show version.
+.SH HTTPS
+Point the domain's DNS A record to the server's public IPv4 address.
+Publish an AAAA record only when public IPv6 reaches the same server.
+Public TCP port 443 must reach www directly, with TLS intact.
+TLS-ALPN-01 validation uses the HTTPS listener; port 80 is unnecessary.
+The process needs permission to bind port 443.
+Certificates are obtained and renewed while the server runs.
+.SH FILES
+On Linux and FreeBSD, ACME storage is $XDG_DATA_HOME/www/acme or
+$HOME/.local/share/www/acme. On macOS it is
+$HOME/Library/Application Support/io.nbari.www/acme.
+New cache directories use mode 0700 and files use 0600 on Unix.
+The older Go certificate cache is not imported.
 .SH EXAMPLES
-.TP
-.BR \fBwww\fR " -r /tmp"
-Start \fBwww\fR serving files from \fI/tmp\fR
-.TP
-.BR \fBwww\fR " -p 80"
-Start \fBwww\fR but listening on port \fI80\fR
-.TP
-.BR \fBwww\fR " -s example.com"
-Start \fBwww\fR with TLS support enabled for the example.com domain
-.BR \fBwww\fR " -s example.com -r /tmp -p 8080"
-Start \fBwww\fR with TLS support listening on port \fI8080\fR serving files from \fI/tmp\fR
-.TP
-.BR \fBwww\fR " -s localhost -r /tmp -p 8080"
-Start \fBwww\fR with TLS support using a self-signed certificate instead of a letsencrypt certificate, listening on port \fI8080\fR serving files from \fI/tmp\fR
+.B www \-r /tmp \-p 8080
+.PP
+.B www \-s localhost \-r ./public \-p 8080
+.PP
+.B www \-s share.example.com \-r ./public \-\-acme-staging
+.PP
+.B www \-s share.example.com \-r ./public
+.SH SIGNALS
+SIGINT and SIGTERM stop accepting connections and allow a bounded graceful drain.
+.SH EXIT STATUS
+Zero after a normal shutdown; nonzero on invalid arguments or fatal startup/runtime errors.
+.SH AUTHORS
+Nicolas Embriz
 .SH BUGS
 https://github.com/nbari/www/issues
-.SH AUTHOR
-.PP
-Nicolas Embriz <nbari@tequila.io>
-.br
-For more information, see the www homepage at
-.br
-https://go-www.com

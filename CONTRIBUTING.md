@@ -70,7 +70,8 @@ any time. Typically, but not exclusively, issues are closed when:
 
 ## Pull Request Process
 
-- Make sure the destination branch is **develop**, We are using git-flow.
+- Target **main** when opening a pull request.
+- Run `just check` and the relevant integration checks before submitting changes.
 
 
 [so]: http://stackoverflow.com/questions/tagged/www

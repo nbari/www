@@ -1,0 +1,92 @@
+[package]
+name = "www"
+version = "3.0.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Nicolas Embriz <nbari@tequila.io>"]
+description = "A simple static web server with automatic HTTPS"
+license = "BSD-3-Clause"
+repository = "https://github.com/nbari/www"
+homepage = "https://github.com/nbari/www"
+readme = "README.md"
+keywords = ["http", "https", "static-files", "web-server", "acme"]
+categories = ["command-line-utilities", "web-programming::http-server", "network-programming"]
+include = ["src/**", "tests/**", "examples/**", "scripts/**", ".justfile", "Cargo.toml", "Cargo.lock", "*.md", "LICENSE", "man/**"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+clap = "4"
+directories = "6"
+futures-util = "0.3"
+percent-encoding = "2"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+ring = "0.17"
+rustls-acme = { version = "0.15", default-features = false, features = ["axum", "ring", "tls12", "webpki-roots"] }
+socket2 = "0.6"
+tempfile = "3"
+time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal", "time"] }
+tower-http = { version = "0.7", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "process", "sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+warnings = "deny"
+
+[lints.clippy]
+# groups
+all = "deny"
+pedantic = "deny"
+nursery = { level = "allow", priority = -1 }
+
+# categories
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+complexity = "deny"
+
+# individual lints
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+await_holding_lock = "deny"
+needless_borrow = "deny"
+needless_collect = "deny"
+large_stack_arrays = "deny"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+depends = ""
+section = "web"
+priority = "optional"
+license-file = ["LICENSE", "0"]
+assets = [
+    ["target/release/www", "usr/bin/www", "755"],
+    ["man/www.1", "usr/share/man/man1/www.1", "644"],
+    ["README.md", "usr/share/doc/www/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+auto-req = "no"
+assets = [
+    { source = "target/release/www", dest = "/usr/bin/www", mode = "0755" },
+    { source = "man/www.1", dest = "/usr/share/man/man1/www.1", mode = "0644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/www/README.md", mode = "0644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/www/LICENSE", mode = "0644", doc = true },
+]

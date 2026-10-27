@@ -5,3 +5,5 @@ coverage.out
 build
 vendor
 .envrc
+/target/
+/dist/

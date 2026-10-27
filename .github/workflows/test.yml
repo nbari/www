@@ -1,26 +1,63 @@
----
-name: test
+name: Test
 
 on:
-  - push
-  - pull_request
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     strategy:
       matrix:
-        go-version:
-          - 1.26.x
-        os:
-          - ubuntu-latest
-          - macos-latest
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: ${{ matrix.go-version }}
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Test
-        run: go test ./...
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v4
+      - run: just check
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: extractions/setup-just@v4
+      - run: just msrv
+
+  acme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v4
+      - run: go install github.com/letsencrypt/pebble/v2/cmd/pebble@v2.8.0
+      - name: Test ACME issuance, idle renewal, restart, and CA outage
+        run: |
+          pebble_gopath="$(go env GOPATH)"
+          export PEBBLE_BIN="$pebble_gopath/bin/pebble"
+          just acme
+
+  freebsd:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.4'
+          arch: ${{ matrix.arch }}
+          usesh: true
+          prepare: pkg install -y rust just
+          run: just check
