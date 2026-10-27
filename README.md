@@ -71,26 +71,61 @@ A fresh ECDSA P-256 certificate covering `localhost`, `127.0.0.1`, and `::1` is 
 2. Allow incoming **TCP port 443** directly to `www` (no TLS-terminating reverse proxy or CDN proxy mode).
 3. Ensure the process has permission to bind port `443` (for example `CAP_NET_BIND_SERVICE` on Linux).
 
-Test first against Let's Encrypt staging (staging certificates are not publicly trusted):
-
-```sh
-www -s share.example.com -r ./public --acme-staging
-```
-
-Then run against production:
+Run with your domain to obtain a publicly trusted certificate. Let's Encrypt production is the default; no staging flag is needed:
 
 ```sh
 www -s share.example.com -r ./public
 ```
 
-`www` answers TLS-ALPN-01 challenges directly on port 443 and renews certificates automatically while running; port 80 and external cron jobs are unnecessary. Staging and production use isolated cache keys.
+`www` answers TLS-ALPN-01 challenges directly on port 443 and renews certificates automatically while running; port 80 and external cron jobs are unnecessary.
 
-Default private certificate storage (`0700` directory, atomic `0600` files on Unix):
+### Certificate cache
+
+`--cert-cache PATH` selects persistent storage for ACME account keys, certificate private keys, and issued certificates. It requires `-s DOMAIN`; `-s localhost` generates its certificate in memory.
+
+For a manual run from a checkout with an explicit cache, build as your normal user, then use `sudo` to bind port 443:
+
+```sh
+just build
+sudo ./target/release/www -s share.example.com \
+  -r ./public --cert-cache /var/lib/www/acme
+```
+
+Replace `share.example.com` with your domain and `./public` with the directory you intend to share. Press **Ctrl+C** to stop. Restart with the same cache path and service account to reuse the account and certificate. For deployments, keep the cache in persistent storage, including across container replacements.
+
+The running user must be able to create and write the cache. New cache directories use `0700` and atomically written files use `0600` on Unix; existing directories must already have owner-only permissions. A cache created by `sudo` contains root-owned files. Treat the cache as private key material and keep it outside your public document root.
+
+Without `--cert-cache`, storage defaults to the running user's data directory:
 
 - Linux and FreeBSD: `$XDG_DATA_HOME/www/acme` or `$HOME/.local/share/www/acme`
 - macOS: `$HOME/Library/Application Support/io.nbari.www/acme`
 
-Use `--cert-cache /path/to/private/acme` to specify a custom owner-only directory.
+Preserve the cache across restarts to avoid unnecessary issuance.
+
+### What `--acme-staging` does
+
+Use `--acme-staging` when testing or debugging certificate issuance:
+
+```sh
+www -s share.example.com -r ./public --acme-staging
+```
+
+This selects Let's Encrypt's test CA. It exercises real certificate issuance and TLS-ALPN-01 validation, with the same DNS and public TCP/443 requirements, but its certificates are not trusted by browsers or ordinary HTTPS clients.
+
+Omit `--acme-staging` for normal HTTPS with a publicly trusted certificate. Staging and production can use the same cache directory because their cache keys are isolated; switching to production uses a cached production certificate or obtains one if needed.
+
+### Testing from another machine
+
+On first start, HTTPS handshakes can fail until issuance finishes. Wait for `DeployedNewCert` or `DeployedCachedCert` in the server log, then run from a remote machine:
+
+```sh
+curl -v https://share.example.com/
+curl -I https://share.example.com/
+```
+
+For a staging test, add `-k` to skip verification of its untrusted certificate, for example `curl -vk https://share.example.com/`. Production certificates should work without `-k`.
+
+To select a protocol explicitly, add `--http1.1` or `--http2` (if your curl build supports HTTP/2). Keep the domain in the URL so the client sends the expected TLS server name.
 
 ## Development and testing
 
