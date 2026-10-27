@@ -73,5 +73,33 @@ any time. Typically, but not exclusively, issues are closed when:
 - Target **main** when opening a pull request.
 - Run `just check` and the relevant integration checks before submitting changes.
 
+## Releases
+
+`release.yml` runs on every pushed tag and through **Run workflow**. A branch run is a dry run:
+it tests, builds all release architectures and packages, and checks `cargo publish --dry-run`.
+A tag run publishes only when the tag matches `Cargo.toml`, for example `3.0.0` or `v3.0.0`.
+All tests, builds, and crate validation must pass before either publication job runs.
+
+Configure [crates.io Trusted Publishing](https://crates.io/docs/trusted-publishing) before
+using tag releases:
+
+1. Make the initial crate publication locally using an API token. crates.io requires an existing
+   crate before Trusted Publishing can be configured. Publish from a clean checkout of the
+   commit you intend to release, using `cargo publish --locked`.
+2. In the crate's **Settings → Trusted Publishing**, add GitHub with repository owner `nbari`,
+   repository name `www`, workflow filename `release.yml`, and environment `crates-io`.
+3. In GitHub repository settings, create the matching `crates-io` environment. Any deployment
+   restrictions must permit your release tags. Required reviewers are optional.
+
+The workflow obtains a short-lived OIDC token only for the final upload; no crates.io token
+secret is needed in GitHub. An identical, non-yanked crate version already on crates.io is
+accepted after checking its SHA-256 checksum. Different contents under the same version fail;
+bump the version rather than reusing it. GitHub release creation precedes the crates.io upload,
+so an upload failure leaves the GitHub assets available and the failed job can be rerun.
+
+For subsequent releases, update the Cargo version and lockfile, commit the changes, wait for
+CI, then push a matching tag. Manually dispatching on a matching tag also publishes; select
+`main` for validation without publication.
+
 
 [so]: http://stackoverflow.com/questions/tagged/www

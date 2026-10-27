@@ -251,22 +251,29 @@ async fn protect_certificate_cache_and_symlink_aliases() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn preserve_ordinary_symlinks_and_non_utf8_filenames() -> Result<()> {
-    use std::{
-        ffi::OsString,
-        os::unix::{ffi::OsStringExt, fs::symlink},
-    };
+async fn preserve_ordinary_symlinks() -> Result<()> {
+    use std::os::unix::fs::symlink;
     let root = tempfile::tempdir()?;
     let external = tempfile::NamedTempFile::new()?;
     std::fs::write(external.path(), "linked")?;
     symlink(external.path(), root.path().join("link"))?;
-    let name = OsString::from_vec(vec![b'x', 0xff]);
-    std::fs::write(root.path().join(name), "bytes")?;
     let app = app(root.path()).await?;
     assert_eq!(
         text(request(&app, "GET", "/link", &[]).await?).await?,
         "linked"
     );
+    Ok(())
+}
+
+// APFS rejects invalid UTF-8 names when creating the fixture (EILSEQ).
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn preserve_non_utf8_filenames() -> Result<()> {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let root = tempfile::tempdir()?;
+    let name = OsString::from_vec(vec![b'x', 0xff]);
+    std::fs::write(root.path().join(name), "bytes")?;
+    let app = app(root.path()).await?;
     assert_eq!(
         text(request(&app, "GET", "/x%FF", &[]).await?).await?,
         "bytes"

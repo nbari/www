@@ -145,7 +145,11 @@ just packages x86_64-unknown-linux-musl
 Use `aarch64-unknown-linux-musl` on an ARM64 Linux builder. The packager checks the executable's
 architecture and static linkage before generating RPM and DEB files in `dist/`. CI builds all
 release architectures after the test workflow passes, and matching version tags publish archives,
-packages, and SHA-256 checksums as GitHub release assets.
+packages, and SHA-256 checksums as GitHub release assets. The separate `release.yml` workflow
+also publishes to crates.io through Trusted Publishing. Every tag triggers the workflow; tags
+must equal the Cargo version, optionally prefixed with `v`. A manual run on `main` validates
+all builds and the crate without publishing. See [release setup](CONTRIBUTING.md#releases)
+for the required crates.io configuration.
 
 The ACME integration test starts Pebble on temporary loopback ports with generated test keys.
 It performs real TLS-ALPN-01 validation, renews a short-lived certificate without HTTP traffic,
