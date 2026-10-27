@@ -49,15 +49,38 @@ jobs:
 
   freebsd:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
       - uses: vmactions/freebsd-vm@v1
         with:
           release: '14.4'
-          arch: ${{ matrix.arch }}
-          usesh: true
+          arch: x86_64
+          copyback: false
           prepare: pkg install -y rust just
           run: just check
+
+  freebsd-arm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: freebsd-arm-tests
+      - name: Install FreeBSD cross compiler
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Lint and compile the ARM64 FreeBSD test suite
+        run: python3 scripts/build-freebsd.py aarch64-unknown-freebsd --tests
+      - name: Run every test executable inside ARM64 FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.4'
+          arch: aarch64
+          sync: nfs
+          copyback: false
+          run: sh target/freebsd-tests/aarch64-unknown-freebsd.sh

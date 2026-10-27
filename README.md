@@ -35,7 +35,7 @@ Release builds cover Linux and FreeBSD on x86, x86_64, and ARM64, and macOS on x
 Linux additionally provides static musl archives and RPM/DEB packages on x86_64 and ARM64,
 using the same Cargo packagers as s3m. Packages install the binary under `/usr/bin`, together
 with the man page and license documentation. Release tags must match the Cargo package version.
-FreeBSD release binaries use the FreeBSD 14.3 ABI sysroot; CI also tests natively on FreeBSD 14.4.
+FreeBSD release binaries use the FreeBSD 14.3 ABI sysroot; CI runs tests in FreeBSD 14.4 VMs.
 Existing Homebrew and FreeBSD package recipes may still install the earlier Go implementation.
 
 ## Options
@@ -182,6 +182,10 @@ python3 scripts/build-freebsd.py aarch64-unknown-freebsd
 
 The script downloads and verifies the official FreeBSD sysroot and installs the selected Rust
 target. It also supports `x86_64-unknown-freebsd` and `i686-unknown-freebsd`.
+With `--tests`, it lints and cross-compiles the full test suite and writes a shell runner under
+`target/freebsd-tests/`. CI runs the ARM64 executables inside FreeBSD with the workspace shared
+at the same path over NFS, avoiding compiler work under CPU emulation. The x86_64 VM also
+builds and runs `just check` inside FreeBSD.
 
 ## Container
 

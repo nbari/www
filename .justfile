@@ -25,7 +25,7 @@ check: fmt-check lint tls-check test
 tls-check:
     #!/usr/bin/env sh
     set -eu
-    dependencies="$(cargo tree --all-features --locked --prefix none --format '{p}')"
+    dependencies="$(cargo tree --all-features --target all --locked --prefix none --format '{p}')"
     if printf '%s\n' "$dependencies" | grep -E '^(openssl|openssl-sys|native-tls|tokio-native-tls|hyper-tls) v'; then
         echo 'TLS dependencies must use Rustls' >&2
         exit 1

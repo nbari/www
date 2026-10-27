@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -20,6 +21,7 @@ TARGETS = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", choices=TARGETS)
+    parser.add_argument("--tests", action="store_true", help="lint and compile test executables for a FreeBSD runner")
     args = parser.parse_args()
     target = args.target
     cache = Path("target/freebsd-sysroots", target).resolve()
@@ -60,7 +62,30 @@ def main():
     env[f"CARGO_TARGET_{key.upper()}_LINKER"] = str(linker)
     env[f"CC_{key}"] = clang
     env[f"CFLAGS_{key}"] = f"--target={target} --sysroot={sdk}"
-    subprocess.run(["cargo", "build", "--release", "--locked", "--bin", "www", "--target", target], env=env, check=True)
+    if args.tests:
+        subprocess.run([
+            "cargo", "clippy", "--locked", "--target", target, "--all-targets", "--all-features",
+            "--", "-D", "warnings",
+        ], env=env, check=True)
+        artifacts = subprocess.check_output([
+            "cargo", "test", "--locked", "--target", target, "--no-run",
+            "--message-format=json-render-diagnostics",
+        ], env=env, text=True)
+        executables = []
+        for line in artifacts.splitlines():
+            artifact = json.loads(line)
+            if (artifact.get("reason") == "compiler-artifact"
+                    and artifact.get("profile", {}).get("test")
+                    and artifact.get("executable")):
+                executables.append(artifact["executable"])
+        if not executables:
+            raise RuntimeError("Cargo produced no FreeBSD test executables")
+        runner = Path("target/freebsd-tests", f"{target}.sh")
+        runner.parent.mkdir(parents=True, exist_ok=True)
+        runner.write_text("#!/bin/sh\nset -eu\n" + "".join(f"{shlex.quote(path)}\n" for path in executables))
+        print(f"Run {runner} inside FreeBSD at the same workspace path ({len(executables)} test executables).", flush=True)
+    else:
+        subprocess.run(["cargo", "build", "--release", "--locked", "--bin", "www", "--target", target], env=env, check=True)
 
 
 if __name__ == "__main__":
