@@ -41,8 +41,12 @@ Staging certificates are not publicly trusted.
 .BR \-h ", " \-\-help
 Show help.
 .TP
-.BR \-V ", " \-\-version
-Show version.
+.B \-V
+Show the package version.
+.TP
+.B \-\-version
+Show the package version and full source commit hash.
+Builds without source metadata show unknown instead of a hash.
 .SH HTTPS
 Point the domain's DNS A record to the server's public IPv4 address.
 Publish an AAAA record only when public IPv6 reaches the same server.

@@ -50,7 +50,8 @@ Existing Homebrew and FreeBSD package recipes may still install the earlier Go i
 | `--cert-cache PATH` | Override persistent ACME account and certificate storage |
 | `--acme-staging` | Test domain HTTPS against Let's Encrypt staging |
 | `-h`, `--help` | Show help |
-| `-V`, `--version` | Show the version |
+| `-V` | Show the package version |
+| `--version` | Show the package version and full source commit hash |
 
 The server listens on all IPv4 and IPv6 interfaces when IPv6 is available. Hidden files are served,
 and ordinary symlinks are followed, including links outside the document root, as in the Go version.
@@ -59,6 +60,9 @@ are excluded from listings and downloads.
 
 Directory HTML, log formatting, MIME inference, and incidental HTTP details can differ from Go.
 The public commands and normal browser/download workflows remain the compatibility contract.
+Help uses the same terminal colors as cron-when. Colors are automatic and disabled for redirected
+output. Version metadata is generated with `built`; registry packages retain the source commit
+through Cargo's `.cargo_vcs_info.json`. Builds without Git or Cargo source metadata show `unknown`.
 
 ## HTTPS on localhost
 

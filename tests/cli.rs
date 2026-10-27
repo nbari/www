@@ -5,6 +5,30 @@ use www::{
 };
 
 #[test]
+fn version_flags_distinguish_package_version_and_full_commit() -> Result<()> {
+    let short = std::process::Command::new(env!("CARGO_BIN_EXE_www"))
+        .arg("-V")
+        .output()?;
+    assert!(short.status.success());
+    assert_eq!(short.stderr.as_slice(), b"");
+    let version = format!("www {}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(String::from_utf8(short.stdout)?.trim(), version);
+
+    let long = std::process::Command::new(env!("CARGO_BIN_EXE_www"))
+        .arg("--version")
+        .output()?;
+    assert!(long.status.success());
+    assert_eq!(long.stderr.as_slice(), b"");
+    let output = String::from_utf8(long.stdout)?;
+    let hash = output
+        .trim()
+        .strip_prefix(&format!("{version} - "))
+        .ok_or_else(|| anyhow::anyhow!("long version has no commit hash: {output}"))?;
+    assert!(hash == "unknown" || (hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit())));
+    Ok(())
+}
+
+#[test]
 fn defaults_and_flags() -> Result<()> {
     let matches = commands::new().try_get_matches_from(["www"])?;
     let Action::Serve(config) = dispatch::handler(&matches)?;
