@@ -156,6 +156,7 @@ async fn replaced_cache_path_symlink_keeps_writes_private() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn symlink_and_fifo_cache_entries_reject() -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
     use rustix::fs::{CWD, Mode, mkfifoat};
     use std::time::Duration;
     use tokio::time::timeout;
@@ -186,7 +187,24 @@ fn symlink_and_fifo_cache_entries_reject() -> Result<()> {
     // Replace with a FIFO: NONBLOCK + regular check must reject promptly.
     std::fs::remove_file(path.join(&key))?;
     let fifo = path.join(&key);
+    #[cfg(not(target_os = "macos"))]
     mkfifoat(CWD, &fifo, Mode::from_bits_truncate(0o600))?;
+    #[cfg(target_os = "macos")]
+    {
+        // rustix::fs::mkfifoat is cfg-excluded on Apple; use POSIX mkfifo.
+        let status = std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&fifo)
+            .status()?;
+        assert!(status.success(), "mkfifo must succeed");
+    }
+    // Prove the fixture is a real FIFO before loading, so a failed creation
+    // cannot yield a false proof.
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let file_type = std::fs::symlink_metadata(&fifo)?.file_type();
+        assert!(file_type.is_fifo(), "fixture must be a FIFO");
+    }
     let fifo_outcome = runtime.block_on(async {
         timeout(
             Duration::from_secs(1),
