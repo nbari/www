@@ -1,4 +1,5 @@
 ## 3.0.1
+* Add grcov source coverage, local just recipes, and CI coverage reports.
 * Add configurable `--bind` address selection with dual-stack default behavior.
 * Enable TCP_NODELAY on accepted HTTP and HTTPS connections and add Rust-only local benchmarks.
 * Replace external ACME test tooling with a Rust-native CA covering TLS-ALPN-01, renewal, persistence, and failure recovery.

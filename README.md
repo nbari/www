@@ -138,6 +138,7 @@ just acme
 
 - `just check` runs formatting, strict Clippy lints, the Rustls-only dependency gate, unit/integration tests, and benchmark safeguard unit tests.
 - `just acme` runs TLS-ALPN-01 issuance, idle renewal, cached restart, and CA outage recovery against an in-process Rust test CA. No external service or container runtime is required.
+- `just coverage` generates HTML and LCOV reports using `grcov`; install its prerequisites with `just coverage-tools`. See [code coverage](CONTRIBUTING.md#code-coverage).
 - `ACME_DOMAIN=example.com ACME_INGRESS_PROBE_CMD='...' just acme-live` runs opt-in live Let's Encrypt staging verification after fail-closed public DNS, egress, port-443 bind, and external ingress nonce checks (see [Live staging verification](CONTRIBUTING.md#live-staging-verification)).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for MSRV verification, live ACME probe protocol, Linux static `musl` packaging, FreeBSD cross-compilation, and release workflows.

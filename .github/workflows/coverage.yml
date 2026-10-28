@@ -1,0 +1,55 @@
+name: Coverage
+
+on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: extractions/setup-just@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+          workspaces: '. -> target/coverage/build'
+      - name: Install grcov
+        run: cargo install grcov --locked --version 0.10.7
+      - name: Cover unit, CLI, runtime, local ACME, and example tests
+        run: just coverage
+      - name: Retain HTML and LCOV reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            target/coverage/html/
+            target/coverage/lcov.info
+          if-no-files-found: warn
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: target/coverage/lcov.info
+          disable_search: true
+          flags: rust
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: target/coverage/lcov.info
+          format: lcov
+          flag-name: rust
+          fail-on-error: false

@@ -84,6 +84,23 @@ just bench-check
 - `just acme` runs TLS-ALPN-01 issuance, idle renewal, cached restart, and CA outage recovery against an in-process Rust test CA. No external service or container runtime is required.
 - `ACME_DOMAIN=example.com ACME_INGRESS_PROBE_CMD='...' just acme-live` runs opt-in live Let's Encrypt staging verification after fail-closed public DNS (Cloudflare DoH), public IPv4/IPv6 egress matching, port 443 bindability, and external ingress nonce verification.
 
+### Code coverage
+
+Install the collector and LLVM tools once, then run the local workload:
+
+```sh
+just coverage-tools
+just coverage
+```
+
+`just coverate` is an alias for `just coverage`. The recipe uses `grcov` and the active Rust toolchain's LLVM tools to instrument all test targets, including CLI subprocesses, the local Rust ACME CA, and benchmark safeguard tests. It leaves the public staging test ignored and does not run load benchmarks.
+
+Open `target/coverage/html/index.html` for the HTML report. `target/coverage/lcov.info` is suitable for coverage services. Reports include application files under `src/`; separate integration-test files, examples, dependencies, and generated build files are excluded. The instrumented build uses `target/coverage/build`, and each run replaces its raw profiles and reports while retaining that build cache. No browser is launched automatically.
+
+Timeout and shutdown tests can interrupt a helper process's profile write. LLVM reports those partial files as warnings and merges the valid profiles. Report generation fails when no valid profiles or no executed application lines are available.
+
+The reusable coverage workflow runs alongside tests and builds, and can also be started manually. It retains HTML and LCOV reports as the `coverage` artifact, uploads to Coveralls, and uploads to Codecov when the repository's `CODECOV_TOKEN` secret is configured. External upload failures do not hide test or report-generation failures. Stable Rust line and function coverage is collected without changing the application's Rust 1.88 minimum version.
+
 ### Local ACME coverage
 
 `tests/acme.rs` hosts a temporary Rustls HTTPS ACME API and signing CA in the test process. It verifies ES256 JWS signatures, account ownership, request URLs and single-use nonces. Before accepting an authorization, it connects to the running `www` listener with SNI and `acme-tls/1`, verifies the TLS handshake signature, and checks the self-signed challenge certificate's single DNS SAN and critical SHA-256 `acmeIdentifier` extension. Finalization checks the CSR signature and ordered identifiers before signing the requested key.

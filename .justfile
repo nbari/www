@@ -22,6 +22,17 @@ lint:
 
 check: fmt-check lint tls-check test
 
+# Install the coverage collector and matching Rust LLVM tools.
+coverage-tools:
+    rustup component add llvm-tools-preview
+    cargo install grcov --locked --version 0.10.7
+
+# Run all local test targets and generate HTML and LCOV source coverage.
+coverage:
+    sh scripts/coverage.sh
+
+alias coverate := coverage
+
 # Fail if a dependency introduces native TLS or OpenSSL into any feature set.
 tls-check:
     #!/usr/bin/env sh
