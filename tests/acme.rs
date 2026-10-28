@@ -1313,11 +1313,38 @@ async fn stop_server(
     Ok(())
 }
 
+/// Load the persisted certificate immediately; an absent certificate is an
+/// error. Used by the renewal/outage assertions so a transient loss of a
+/// previously persisted certificate is never hidden.
 async fn cached(cache: &PrivateCache, directory: &str) -> Result<Vec<u8>> {
     cache
         .load_cert(&["localhost".to_owned()], directory)
         .await?
         .context("certificate was not cached")
+}
+
+/// Load the initial certificate and account key after first deployment,
+/// bounded-waiting for the asynchronous cache stores to complete. Real cache
+/// I/O errors propagate; only absent entries are retried (5s deadline, 20ms).
+async fn initial_cache(cache: &PrivateCache, directory: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let certificate = cache
+            .load_cert(&["localhost".to_owned()], directory)
+            .await
+            .context("certificate cache read failed")?;
+        let account = cache
+            .load_account(&[], directory)
+            .await
+            .context("ACME account cache read failed")?;
+        if let (Some(certificate), Some(account)) = (certificate, account) {
+            return Ok((certificate, account));
+        }
+        if Instant::now() > deadline {
+            bail!("initial certificate or ACME account key was not cached");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 fn cached_leaf(pem: &[u8]) -> Result<CertificateDer<'static>> {
@@ -1466,12 +1493,8 @@ async fn issue_renew_restart_and_recover_from_ca_outage() -> Result<()> {
     );
     assert!(head.bytes().await?.is_empty());
 
-    let original = cached(&cache, &directory).await?;
+    let (original, account_before) = initial_cache(&cache, &directory).await?;
     assert_eq!(original_der, cached_leaf(&original)?.as_ref());
-    let account_before = cache
-        .load_account(&[], &directory)
-        .await?
-        .context("ACME account key was not cached")?;
 
     // No HTTP requests while waiting: background renewal must occur automatically while idle.
     let deadline = Instant::now() + Duration::from_secs(30);

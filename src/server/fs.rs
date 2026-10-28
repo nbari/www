@@ -152,7 +152,15 @@ fn open_final(
 }
 
 fn not_found_or(e: io::Error) -> io::Error {
+    use rustix::io::Errno;
     let raw = e.raw_os_error();
+    // Race/unsupported outcomes normalize to NotFound. Raw errno matching is
+    // portable across kernels (no blanket ErrorKind change for unrelated I/O):
+    //   ELOOP  - Linux and macOS O_NOFOLLOW on a symlink leaf (VLNK).
+    //   EMLINK - FreeBSD O_NOFOLLOW on a symlink leaf (VLNK; vfs_vnops).
+    //   ENXIO  - Linux O_RDONLY on a Unix-domain socket (VSOCK preflight 404).
+    //   EOPNOTSUPP / ENOTSUP - FreeBSD and macOS O_RDONLY on a Unix-domain
+    //            socket (VSOCK).
     let race_like = matches!(
         e.kind(),
         io::ErrorKind::PermissionDenied
@@ -160,10 +168,14 @@ fn not_found_or(e: io::Error) -> io::Error {
             | io::ErrorKind::NotADirectory
             | io::ErrorKind::IsADirectory
             | io::ErrorKind::InvalidInput
-    ) || raw == Some(rustix::io::Errno::LOOP.raw_os_error())
-        // ENXIO: opening a Unix-domain socket path with O_RDONLY fails; the
-        // old metadata preflight classified it as a non-file (404).
-        || raw == Some(rustix::io::Errno::NXIO.raw_os_error());
+    ) || matches!(
+        raw,
+        Some(r) if r == Errno::LOOP.raw_os_error()
+            || r == Errno::MLINK.raw_os_error()
+            || r == Errno::NXIO.raw_os_error()
+            || r == Errno::OPNOTSUPP.raw_os_error()
+            || r == Errno::NOTSUP.raw_os_error()
+    );
     if race_like {
         io::Error::from(io::ErrorKind::NotFound)
     } else {
@@ -433,6 +445,49 @@ fn open_dir_at(dir: &File, name: &std::ffi::OsStr) -> io::Result<(File, Metadata
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Raw race/unsupported errno outcomes normalize to `NotFound`; ordinary
+    /// I/O errors are preserved. Covers Linux (`ELOOP`/`ENXIO`) and FreeBSD
+    /// (`EMLINK` for `VLNK` via `O_NOFOLLOW`, `EOPNOTSUPP` for `VSOCK`)
+    /// primary-source mappings.
+    #[test]
+    fn not_found_or_normalizes_race_and_unsupported_errnos() {
+        use rustix::io::Errno;
+        for raw in [
+            Errno::LOOP.raw_os_error(),
+            Errno::NXIO.raw_os_error(),
+            Errno::MLINK.raw_os_error(),
+            Errno::OPNOTSUPP.raw_os_error(),
+            Errno::NOTSUP.raw_os_error(),
+        ] {
+            let error = io::Error::from_raw_os_error(raw);
+            let normalized = not_found_or(error);
+            assert_eq!(
+                normalized.kind(),
+                io::ErrorKind::NotFound,
+                "raw errno {raw} must map to NotFound"
+            );
+        }
+    }
+
+    /// Ordinary I/O errors pass through unchanged (no blanket `ErrorKind` change).
+    #[test]
+    fn not_found_or_preserves_ordinary_errors() {
+        use rustix::io::Errno;
+        for raw in [
+            Errno::IO.raw_os_error(),
+            Errno::NOENT.raw_os_error(),
+            Errno::CONNRESET.raw_os_error(),
+        ] {
+            let error = io::Error::from_raw_os_error(raw);
+            let normalized = not_found_or(error);
+            assert_eq!(
+                normalized.raw_os_error(),
+                Some(raw),
+                "ordinary raw errno {raw} must be preserved"
+            );
+        }
+    }
     use std::fs;
     use tempfile::TempDir;
 
