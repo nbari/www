@@ -31,7 +31,9 @@ fn version_flags_distinguish_package_version_and_full_commit() -> Result<()> {
 #[test]
 fn defaults_and_flags() -> Result<()> {
     let matches = commands::new().try_get_matches_from(["www"])?;
-    let Action::Serve(config) = dispatch::handler(&matches)?;
+    let Action::Serve(config) = dispatch::handler(&matches)? else {
+        anyhow::bail!("expected default listener action");
+    };
     assert_eq!(config.root.to_str(), Some("."));
     assert_eq!(config.port, 8000);
     assert!(matches!(config.tls, TlsMode::Http));
@@ -46,7 +48,9 @@ fn defaults_and_flags() -> Result<()> {
         "-s",
         "localhost",
     ])?;
-    let Action::Serve(config) = dispatch::handler(&matches)?;
+    let Action::Serve(config) = dispatch::handler(&matches)? else {
+        anyhow::bail!("expected default listener action");
+    };
     assert_eq!(config.root.to_str(), Some("/tmp"));
     assert_eq!(config.port, 8080);
     assert!(matches!(config.tls, TlsMode::Localhost));
@@ -58,7 +62,9 @@ fn defaults_and_flags() -> Result<()> {
 fn domain_forces_port_and_uses_persistent_storage() -> Result<()> {
     let matches =
         commands::new().try_get_matches_from(["www", "-s", "EXAMPLE.COM", "-p", "8080"])?;
-    let Action::Serve(config) = dispatch::handler(&matches)?;
+    let Action::Serve(config) = dispatch::handler(&matches)? else {
+        anyhow::bail!("expected default listener action");
+    };
     assert_eq!(config.port, 443);
     let TlsMode::Acme(options) = config.tls else {
         anyhow::bail!("expected ACME")
@@ -81,7 +87,9 @@ fn explicit_cache_and_staging() -> Result<()> {
         "/custom/cache",
         "--acme-staging",
     ])?;
-    let Action::Serve(config) = dispatch::handler(&matches)?;
+    let Action::Serve(config) = dispatch::handler(&matches)? else {
+        anyhow::bail!("expected default listener action");
+    };
     let TlsMode::Acme(options) = config.tls else {
         anyhow::bail!("expected ACME")
     };
@@ -127,6 +135,55 @@ fn reject_invalid_arguments_and_domain_combinations() -> Result<()> {
         let matches =
             commands::new().try_get_matches_from(["www", "-s", domain, "--acme-staging"])?;
         assert!(dispatch::handler(&matches).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn bind_parses_numeric_addresses_and_preserves_port_rules() -> Result<()> {
+    for address in ["127.0.0.1", "0.0.0.0", "::1", "::"] {
+        let matches =
+            commands::new().try_get_matches_from(["www", "--bind", address, "-p", "8080"])?;
+        let Action::ServeBound(config, parsed) = dispatch::handler(&matches)? else {
+            anyhow::bail!("expected explicit listener action");
+        };
+        assert_eq!(parsed, address.parse::<std::net::IpAddr>()?);
+        assert_eq!(config.port, 8080);
+        assert!(matches!(config.tls, TlsMode::Http));
+    }
+    for (domain, expected_port) in [("localhost", 8080), ("example.com", 443)] {
+        let matches = commands::new().try_get_matches_from([
+            "www",
+            "--bind",
+            "127.0.0.1",
+            "-p",
+            "8080",
+            "-s",
+            domain,
+        ])?;
+        let Action::ServeBound(config, _) = dispatch::handler(&matches)? else {
+            anyhow::bail!("expected explicit listener action");
+        };
+        assert_eq!(config.port, expected_port);
+    }
+    for address in [
+        "localhost",
+        "example.com",
+        "127.0.0.1:8080",
+        "[::1]:8080",
+        "[::1]",
+        "999.1.1.1",
+    ] {
+        assert!(
+            commands::new()
+                .try_get_matches_from(["www", "--bind", address])
+                .is_err()
+        );
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_www"))
+            .args(["--bind", address])
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8(output.stderr)?.contains("--bind"));
     }
     Ok(())
 }

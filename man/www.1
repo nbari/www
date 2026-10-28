@@ -4,6 +4,7 @@ www \- simple static HTTP and HTTPS server
 .SH SYNOPSIS
 .B www
 .RB [ \-p " port"]
+.RB [ \-\-bind " IP"]
 .RB [ \-r " path"]
 .RB [ \-q ]
 .RB [ \-s " domain"]
@@ -19,6 +20,12 @@ The active certificate cache and its aliases are excluded.
 .TP
 .BI \-p " port"
 Listening port; default 8000. Domain HTTPS always uses 443.
+.TP
+.BI \-\-bind " IP"
+Bind a numeric IPv4 or IPv6 address. The default remains all interfaces.
+Explicit IPv6 listens only on IPv6; explicit failures never fall back.
+Hostnames and address:port forms are rejected. Use \-p to select the port;
+domain HTTPS still uses 443 and requires public ingress to this listener.
 .TP
 .BI \-r " path"
 Document root; default the current directory.
@@ -61,6 +68,8 @@ $HOME/Library/Application Support/io.nbari.www/acme.
 New cache directories use mode 0700 and files use 0600 on Unix.
 .SH EXAMPLES
 .B www \-r /tmp \-p 8080
+.PP
+.B www \-\-bind 127.0.0.1 \-r ./public \-p 8080
 .PP
 .B www \-s localhost \-r ./public \-p 8080
 .PP

@@ -113,7 +113,7 @@ just acme-live
 
 ### Listener binding and serving policy evaluation
 
-- **Dual-stack default (`[::]:port` / `0.0.0.0:port`)**: `server::bind(port)` binds `IPV6_V6ONLY=false` on `[::]:port` with automatic fallback to `0.0.0.0:port`. Adding a `--bind` flag was evaluated and intentionally deferred: ACME TLS-ALPN-01 requires public Dual-Stack/IPv4 reachability on port 443, and keeping the CLI surface minimal (`-p`, `-r`, `-q`, `-s`, `--cert-cache`, `--acme-staging`) avoids conflicting bind/ACME states while container or firewall rules already scope interface exposure when needed.
+- **Listener addresses**: Omitting `--bind` retains `server::bind(port)` and its all-interface dual-stack default (`[::]:port`, `IPV6_V6ONLY=false`, with IPv4 fallback when IPv6 socket setup is unavailable). `--bind IP` accepts a numeric IPv4 or IPv6 address, binds that exact family/address, and never falls back after an explicit bind failure. Explicit IPv6 uses `IPV6_V6ONLY=true`. `-p` still selects the port except domain HTTPS, which always uses 443. ACME TLS-ALPN-01 validation must reach the selected listener through public DNS and ingress.
 - **Dotfiles, symlinks, and directory listings**: Serving hidden files, following ordinary symlinks outside the document root, and generating directory listings when `index.html` is absent remain intentional defaults for compatibility. Path traversal (`..`), NUL/backslash bytes, and the active ACME certificate cache (including symlink aliases to it) are always blocked. Future strict-mode toggles (such as disabling external symlinks, dotfiles, or listings) should be introduced only if requested as a single cohesive policy rather than multiple overlapping flags.
 
 ### Linux static musl packages (DEB and RPM)

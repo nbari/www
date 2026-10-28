@@ -170,3 +170,87 @@ fn startup_failures_are_visible_even_when_quiet() -> Result<()> {
     assert!(String::from_utf8(output.stderr)?.contains("cannot listen"));
     Ok(())
 }
+
+#[test]
+fn explicit_listeners_bind_exact_addresses_without_fallback() -> Result<()> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let listener = www::server::bind_address(Some(v4), 0)?;
+    assert_eq!(listener.local_addr()?.ip(), v4);
+    let error = www::server::bind_address(Some(v4), listener.local_addr()?.port())
+        .err()
+        .context("occupied explicit IPv4 bind unexpectedly succeeded")?;
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+    // Probe OS support independently; do not hide implementation failures.
+    if let Ok(probe) = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) {
+        drop(probe);
+        let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        let listener = www::server::bind_address(Some(v6), 0)?;
+        assert_eq!(listener.local_addr()?.ip(), v6);
+        assert!(socket2::SockRef::from(&listener).only_v6()?);
+        let error = www::server::bind_address(Some(v6), listener.local_addr()?.port())
+            .err()
+            .context("occupied explicit IPv6 bind unexpectedly succeeded")?;
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+    }
+    let default = www::server::bind_address(None, 0)?;
+    assert!(default.local_addr()?.ip().is_unspecified());
+    if default.local_addr()?.is_ipv6() {
+        assert!(!socket2::SockRef::from(&default).only_v6()?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_cli_serves_on_explicit_loopback_addresses() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("bound.txt"), "explicit listener")?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    for (address, host) in [("127.0.0.1", "127.0.0.1"), ("::1", "[::1]")] {
+        if address == "::1" && TcpListener::bind("[::1]:0").is_err() {
+            continue;
+        }
+        let mut server = Server::start(root.path(), &["--bind", address])?;
+        let port = server.port;
+        let response = ready(
+            &mut server,
+            &client,
+            &format!("http://{host}:{port}/bound.txt"),
+        )
+        .await?;
+        assert_eq!(response.text().await?, "explicit listener");
+        server.stop("-TERM").await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_cli_explicit_occupied_bind_fails_without_fallback() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let listener = www::server::bind_address(Some("127.0.0.1".parse()?), 0)?;
+    let log = tempfile::NamedTempFile::new()?;
+    let port = listener.local_addr()?.port();
+    let child = Command::new(env!("CARGO_BIN_EXE_www"))
+        .args(["--bind", "127.0.0.1", "-p", &port.to_string(), "-r"])
+        .arg(root.path())
+        .stdout(Stdio::null())
+        .stderr(log.reopen()?)
+        .spawn()?;
+    let mut server = Server { child, log, port };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = server.child.try_wait()? {
+            assert!(!status.success());
+            assert!(server.logs()?.contains("cannot listen"));
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("occupied explicit bind did not fail: {}", server.logs()?);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

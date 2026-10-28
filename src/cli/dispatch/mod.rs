@@ -43,7 +43,11 @@ pub fn handler(matches: &ArgMatches) -> Result<Action> {
     if !matches!(tls, TlsMode::Acme(_)) && (staging || cache_override.is_some()) {
         bail!("--cert-cache and --acme-staging require -s with a domain other than localhost");
     }
-    Ok(Action::Serve(ServerConfig { root, port, tls }))
+    let config = ServerConfig { root, port, tls };
+    Ok(match matches.get_one::<std::net::IpAddr>("bind") {
+        Some(address) => Action::ServeBound(config, *address),
+        None => Action::Serve(config),
+    })
 }
 
 fn default_cache_dir() -> Result<PathBuf> {

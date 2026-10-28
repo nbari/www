@@ -38,6 +38,7 @@ Prebuilt release archives and packages are published on [GitHub Releases](https:
 ```sh
 www
 www -r /tmp -p 8080
+www --bind 127.0.0.1 -r ./public -p 8080
 www -q -r ./public
 ```
 
@@ -46,6 +47,7 @@ www -q -r ./public
 | Option | Behavior |
 | --- | --- |
 | `-p PORT` | Listen on this port; default `8000` |
+| `--bind IP` | Bind a numeric IPv4 or IPv6 address; default all interfaces |
 | `-r PATH` | Serve this directory; default current directory (`.`) |
 | `-q` | Suppress startup and request logs; errors remain visible |
 | `-s localhost` | Generate an in-memory self-signed ECDSA certificate and use the selected port |
@@ -162,6 +164,6 @@ docker run --rm -p 8000:8000 -v "$PWD:/srv:ro" www
 
 ## Security
 
-`www` binds all IPv4 and IPv6 interfaces (`[::]:port` with dual-stack fallback to `0.0.0.0:port`) by default. Hidden files (dotfiles) are served and ordinary symbolic links are followed, including links pointing outside the document root; share only directories intended for public access. Path traversal (`..`), NUL bytes, backslashes, and the active ACME certificate cache directory (including symlink aliases to it) are rejected.
+`www` binds all IPv4 and IPv6 interfaces (`[::]:port` with dual-stack fallback to `0.0.0.0:port`) by default. Use `--bind 127.0.0.1` or `--bind ::1` for loopback access. Explicit addresses bind only their selected family; IPv6 addresses do not accept IPv4 connections. Hostnames and address:port forms are not accepted; select the port with `-p`. Domain HTTPS still uses port `443`, and the selected interface must receive public ACME validation traffic. Hidden files (dotfiles) are served and ordinary symbolic links are followed, including links pointing outside the document root; share only directories intended for public access. Path traversal (`..`), NUL bytes, backslashes, and the active ACME certificate cache directory (including symlink aliases to it) are rejected.
 
 Security support starts with version 3. Report vulnerabilities privately as described in [the security policy](.github/SECURITY.md).

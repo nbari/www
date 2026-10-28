@@ -3,7 +3,7 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
     value_parser,
 };
-use std::{path::PathBuf, sync::LazyLock};
+use std::{net::IpAddr, path::PathBuf, sync::LazyLock};
 
 #[allow(clippy::doc_markdown)]
 pub mod built_info {
@@ -39,6 +39,13 @@ pub fn new() -> Command {
                 .value_parser(value_parser!(u16))
                 .default_value("8000")
                 .help("Listen on this port (domain HTTPS always uses 443)"),
+        )
+        .arg(
+            Arg::new("bind")
+                .long("bind")
+                .value_name("IP")
+                .value_parser(value_parser!(IpAddr))
+                .help("Bind this numeric IPv4 or IPv6 address (default: all interfaces)"),
         )
         .arg(
             Arg::new("quiet")

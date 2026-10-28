@@ -1,4 +1,4 @@
-use super::Files;
+use super::{Files, file_response, fs};
 use axum::{
     body::Body,
     extract::Request,
@@ -9,9 +9,9 @@ use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use std::{
     fmt::Write as _,
     io,
+    os::unix::ffi::OsStringExt as _,
     path::{Component, Path, PathBuf},
 };
-use tower_http::services::ServeFile;
 
 const URL_COMPONENT: &AsciiSet = &CONTROLS
     .add(b' ')
@@ -42,13 +42,7 @@ fn relative_path(url: &str) -> Option<PathBuf> {
     if bytes.contains(&0) || bytes.contains(&b'\\') {
         return None;
     }
-    #[cfg(unix)]
-    let path = {
-        use std::os::unix::ffi::OsStringExt;
-        PathBuf::from(std::ffi::OsString::from_vec(bytes))
-    };
-    #[cfg(not(unix))]
-    let path = PathBuf::from(String::from_utf8(bytes).ok()?);
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
     let mut relative = PathBuf::new();
     for part in path.components() {
         match part {
@@ -61,6 +55,12 @@ fn relative_path(url: &str) -> Option<PathBuf> {
 }
 
 fn error(error: &io::Error) -> Response {
+    // Policy/race denials from the protected resolver are indistinguishable
+    // from a missing resource to the client (404); ordinary permission errors
+    // remain 403.
+    if fs::is_denied(error) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let status = match error.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => StatusCode::NOT_FOUND,
         io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
@@ -72,15 +72,16 @@ fn error(error: &io::Error) -> Response {
     status.into_response()
 }
 
-async fn allowed(files: &Files, path: &Path) -> bool {
-    if let Some(cache) = &files.protected {
-        match tokio::fs::canonicalize(path).await {
-            Ok(path) => !path.starts_with(cache),
-            Err(_) => false,
-        }
-    } else {
-        true
-    }
+/// Open a path through the protection (or unprotected) resolver on a blocking
+/// worker. Policy/race denials map to 404; ordinary permission errors to 403.
+async fn prepare(files: &Files, path: PathBuf) -> io::Result<fs::Opened> {
+    let protected = files.protected.clone();
+    tokio::task::spawn_blocking(move || match protected {
+        Some(protected) => protected.open(&path),
+        None => fs::open(&path),
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 fn redirect(request: &Request, path: &str) -> Response {
@@ -97,52 +98,44 @@ fn redirect(request: &Request, path: &str) -> Response {
 }
 
 pub(super) async fn serve(files: &Files, request: Request) -> Response {
-    let url = request.uri().path();
-    let Some(relative) = relative_path(url) else {
+    let url = request.uri().path().to_owned();
+    let Some(relative) = relative_path(&url) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let path = files.root.join(relative);
-    if !allowed(files, &path).await {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let metadata = match tokio::fs::metadata(&path).await {
-        Ok(metadata) => metadata,
+    let opened = match prepare(files, path.clone()).await {
+        Ok(opened) => opened,
         Err(err) => return error(&err),
     };
-    if metadata.is_file()
-        && let Some(parent) = url.strip_suffix("/index.html")
-    {
+    let is_file = opened.metadata.is_file();
+    let is_dir = opened.metadata.is_dir();
+    if is_file && let Some(parent) = url.strip_suffix("/index.html") {
         return redirect(&request, &format!("{parent}/"));
     }
-    if metadata.is_dir() {
+    if is_dir {
         if !url.ends_with('/') {
             return redirect(&request, &format!("{url}/"));
         }
+        // Index path lookup is checked/opened independently; a policy denial
+        // on the index is a 404 (not a missing index that falls back to 200).
         let index = path.join("index.html");
-        if let Ok(metadata) = tokio::fs::metadata(&index).await
-            && metadata.is_file()
-        {
-            if !allowed(files, &index).await {
-                return StatusCode::NOT_FOUND.into_response();
+        match prepare(files, index.clone()).await {
+            Ok(index_opened) if index_opened.metadata.is_file() => {
+                return file_response::serve(index_opened, &index, request).await;
             }
-            return file(index, request).await;
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound && !fs::is_denied(&err) => {}
+            Err(err) => return error(&err),
         }
-        return listing(files, &path, request.method() == Method::HEAD).await;
+        return listing(files, &opened, &path, request.method() == Method::HEAD).await;
     }
-    if !metadata.is_file() {
+    if !is_file {
         return StatusCode::NOT_FOUND.into_response();
     }
     if url.ends_with('/') {
         return redirect(&request, url.trim_end_matches('/'));
     }
-    file(path, request).await
-}
-
-async fn file(path: PathBuf, request: Request) -> Response {
-    match ServeFile::new(path).try_call(request).await {
-        Ok(response) => response.map(Body::new),
-        Err(err) => error(&err),
-    }
+    file_response::serve(opened, &path, request).await
 }
 
 fn escape(text: &str) -> String {
@@ -153,38 +146,79 @@ fn escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-async fn listing(files: &Files, path: &Path, head: bool) -> Response {
-    let mut entries = match tokio::fs::read_dir(path).await {
-        Ok(entries) => entries,
+/// A resolved listing row: raw name plus whether it renders as a directory.
+type Row = (std::ffi::OsString, bool);
+
+/// Enumerate and classify a directory listing entirely inside a blocking job.
+///
+/// Every entry is resolved through the protection so cache contents and
+/// active-cache aliases are hidden (policy denial => hidden). A known
+/// regular-file or directory label is preserved even when read-open yields an
+/// ordinary `PermissionDenied` (listing needs no read permission); broken
+fn classify_listing(files: &Files, dir: &Path, entries: Vec<fs::Entry>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for entry in entries {
+        let is_dir = match &files.protected {
+            None => {
+                // Unprotected: the dirent file type is authoritative for known
+                // regular files and directories (no per-entry open); symlink
+                // and unknown types are classified with std::fs::metadata
+                // (follows the link, no read permission required). Broken
+                // symlinks and non-file/non-dir types are hidden.
+                if entry.is_dir() {
+                    Some(true)
+                } else if entry.is_file() {
+                    Some(false)
+                } else {
+                    let target = dir.join(&entry.name);
+                    std::fs::metadata(&target)
+                        .ok()
+                        .filter(|m| m.is_file() || m.is_dir())
+                        .map(|m| m.is_dir())
+                }
+            }
+            Some(protected) => {
+                // Protected: metadata-only classification through the same
+                // descriptor walk + cache identity checks (no read permission).
+                // Policy denial hides cache contents/aliases; a symlink leaf or
+                // non-file/non-dir target is hidden.
+                let target = dir.join(&entry.name);
+                match protected.classify(&target) {
+                    Ok(is_dir) => Some(is_dir),
+                    Err(err) if fs::is_denied(&err) => None,
+                    Err(_) => None,
+                }
+            }
+        };
+        if let Some(is_dir) = is_dir {
+            rows.push((entry.name, is_dir));
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
+async fn listing(files: &Files, opened: &fs::Opened, dir: &Path, head: bool) -> Response {
+    let handle = match opened.file.try_clone() {
+        Ok(handle) => handle,
         Err(err) => return error(&err),
     };
-    let mut names = Vec::new();
-    loop {
-        let entry = match entries.next_entry().await {
-            Ok(Some(entry)) => entry,
-            Ok(None) => break,
-            Err(err) => return error(&err),
-        };
-        if !allowed(files, &entry.path()).await {
-            continue;
-        }
-        let is_dir = match entry.file_type().await {
-            Ok(kind) if kind.is_dir() => true,
-            Ok(kind) if kind.is_file() => false,
-            Ok(kind) if kind.is_symlink() => match tokio::fs::metadata(entry.path()).await {
-                Ok(metadata) if metadata.is_dir() => true,
-                Ok(metadata) if metadata.is_file() => false,
-                _ => continue,
-            },
-            _ => continue,
-        };
-        names.push((entry.file_name(), is_dir));
-    }
-    names.sort_by(|a, b| a.0.cmp(&b.0));
+    let files_owned = files.clone();
+    let dir_owned = dir.to_path_buf();
+    let rows = match tokio::task::spawn_blocking(move || -> io::Result<Vec<Row>> {
+        let entries = fs::list_entries(&handle)?;
+        Ok(classify_listing(&files_owned, &dir_owned, entries))
+    })
+    .await
+    {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(err)) => return error(&err),
+        Err(err) => return error(&io::Error::other(err)),
+    };
     let mut html = String::from(
         "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Directory listing</title>\n<pre>\n",
     );
-    for (name, directory) in names {
+    for (name, directory) in rows {
         let suffix = if directory { "/" } else { "" };
         let href = percent_encode(name.as_encoded_bytes(), URL_COMPONENT);
         let label = escape(&name.to_string_lossy());

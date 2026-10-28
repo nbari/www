@@ -6,4 +6,5 @@ pub mod serve;
 #[derive(Debug)]
 pub enum Action {
     Serve(ServerConfig),
+    ServeBound(ServerConfig, std::net::IpAddr),
 }

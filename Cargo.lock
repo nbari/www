@@ -2377,7 +2377,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "www"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2389,10 +2389,14 @@ dependencies = [
  "directories",
  "futures-util",
  "http-body-util",
+ "httpdate",
+ "libc",
+ "mime_guess",
  "percent-encoding",
  "rcgen",
  "reqwest",
  "ring",
+ "rustix",
  "rustls-acme",
  "serde_json",
  "socket2",
