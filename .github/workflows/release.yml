@@ -46,6 +46,7 @@ jobs:
   build:
     needs: validate
     uses: ./.github/workflows/build.yml
+    secrets: inherit
 
   crate:
     needs: validate
