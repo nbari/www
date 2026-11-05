@@ -515,6 +515,81 @@ async fn multi_range_serves_full_and_single_range_errors_stay_416() -> Result<()
     Ok(())
 }
 
+/// RFC 9110 §13.1.5: a failing `If-Range` makes the server ignore `Range`
+/// entirely, so an unsatisfiable or malformed range must still serve the full
+/// representation instead of 416.
+#[tokio::test]
+async fn failed_if_range_ignores_unsatisfiable_and_malformed_ranges() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("file.txt"), "0123456789")?;
+    touch_past(&root.path().join("file.txt"))?;
+    let app = app(root.path()).await?;
+
+    let stale = [
+        "\"stale-etag\"",
+        "W/\"stale-etag\"",
+        "Sat, 01 Jan 2000 00:00:00 GMT",
+        "garbage",
+    ];
+    for range in ["bytes=99-", "bytes=abc", "bytes=10-5", "items=0-1"] {
+        for validator in stale {
+            let response = request(
+                &app,
+                "GET",
+                "/file.txt",
+                &[("range", range), ("if-range", validator)],
+            )
+            .await?;
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "range {range} if-range {validator}"
+            );
+            assert_eq!(
+                response.headers().get("content-range"),
+                None,
+                "range {range} if-range {validator}"
+            );
+            assert_eq!(
+                text(response).await?,
+                "0123456789",
+                "range {range} if-range {validator}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A modification time that predates the Unix epoch is unrepresentable as an
+/// HTTP date. The file is still served, without validators, instead of
+/// panicking the connection task.
+#[tokio::test]
+async fn pre_epoch_modification_time_drops_validators_without_panicking() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("file.txt");
+    std::fs::write(&file, "0123456789")?;
+    std::fs::File::open(&file)?
+        .set_modified(std::time::SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(60))?;
+    let app = app(root.path()).await?;
+
+    let response = request(&app, "GET", "/file.txt", &[]).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("last-modified"), None);
+    assert_eq!(response.headers().get("etag"), None);
+    assert_eq!(text(response).await?, "0123456789");
+
+    // Without validators a conditional request cannot match and must serve 200.
+    let response = request(
+        &app,
+        "GET",
+        "/file.txt",
+        &[("if-modified-since", "Thu, 01 Jan 2099 00:00:00 GMT")],
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
 // APFS rejects invalid UTF-8 names when creating the fixture (EILSEQ).
 #[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]

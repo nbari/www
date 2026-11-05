@@ -1,6 +1,6 @@
 [package]
 name = "www"
-version = "3.0.1"
+version = "3.1.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
@@ -21,6 +21,8 @@ axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 clap = "4"
 directories = "6"
 futures-util = "0.3"
+http-body = "1"
+http-range-header = "0.4"
 httpdate = "1"
 mime_guess = "2"
 percent-encoding = "2"
@@ -31,7 +33,6 @@ socket2 = "0.6"
 rustix = { version = "1", features = ["fs"] }
 time = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal", "time"] }
-tower-http = { version = "0.7", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 

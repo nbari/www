@@ -1,272 +1,506 @@
-//! Authorized single-file responses built on `tower-http`'s `ServeDir`.
+//! Authorized single-file responses.
 //!
-//! After the caller authorizes and prepares one file handle ([`Opened`]), this
-//! module streams ONLY that handle through a private per-request [`Backend`],
-//! preserving `tower-http`'s correct `Range`/precondition handling while never
-//! re-opening any pathname. The request URI is rewritten to a constant
-//! synthetic UTF-8 path (`/file`) because `ServeDir` decodes the URI with
-//! `decode_utf8`, which would reject raw non-UTF-8 filenames.
+//! The caller authorizes and prepares exactly one file handle ([`Opened`]) and
+//! this module turns it into the HTTP response: validators, RFC 9110 §13.2.2
+//! precondition precedence, single `Range` handling and body framing. No
+//! pathname is ever reopened, and the only filesystem work left is reading the
+//! bytes of a body that was too large to be read by the resolving job.
+//!
+//! Validator formats and header order match what the server has always sent.
 
 use super::fs::Opened;
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::Request,
-    http::{HeaderValue, Method, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use http_body::Frame;
 use std::{
-    future::Future,
-    io,
-    path::PathBuf,
-    sync::{Arc, Mutex},
+    io::{self, Read as _, Seek as _},
+    ops::RangeInclusive,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+    time::SystemTime,
 };
-use tower_http::services::fs::{Backend, DefaultServeDirFallback, File as TowerFile, ServeDir};
 
-/// `ServeDir` constrained to our one-file backend.
-type OneFileServeDir = ServeDir<DefaultServeDirFallback, OneFileBackend>;
+/// Seconds from the Unix epoch to year 10000, past which `httpdate` panics.
+const YEAR_10000: u64 = 253_402_300_800;
 
-/// Private per-request backend constrained to one prepared file handle.
-///
-/// The handle is consumed ONCE (`Arc<Mutex<Option<std File>>>`); `metadata` is
-/// served from the cached fstat without any filesystem task. Both `open` and
-/// `metadata` ignore the requested path and return the authorized handle.
-#[derive(Clone)]
-pub(super) struct OneFileBackend {
-    file: Arc<Mutex<Option<std::fs::File>>>,
-    metadata: std::fs::Metadata,
+/// Bytes requested from the blocking pool per streaming body chunk. Large
+/// enough that a multi-megabyte body costs a handful of pool handoffs and
+/// socket writes instead of one per 64 `KiB`.
+const CHUNK: u64 = 256 * 1024;
+
+/// Validators derived from the prepared handle's `fstat`.
+struct Validators {
+    last_modified: Option<httpdate::HttpDate>,
+    etag: Option<HeaderValue>,
 }
 
-impl OneFileBackend {
-    fn new(opened: Opened) -> Self {
+impl Validators {
+    fn new(metadata: &std::fs::Metadata) -> Self {
+        let none = Self {
+            last_modified: None,
+            etag: None,
+        };
+        let Ok(modified) = metadata.modified() else {
+            return none;
+        };
+        // `httpdate` panics on pre-epoch instants and on years past 9999, so
+        // an unrepresentable mtime drops both validators instead of taking
+        // down the connection task.
+        let Ok(age) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+            return none;
+        };
+        if age.as_secs() >= YEAR_10000 {
+            return none;
+        }
+        let etag = HeaderValue::from_str(&format!(
+            "\"{:x}.{:08x}-{:x}\"",
+            age.as_secs(),
+            age.subsec_nanos(),
+            metadata.len()
+        ))
+        .ok();
         Self {
-            file: Arc::new(Mutex::new(Some(opened.file))),
-            metadata: opened.metadata,
+            last_modified: Some(httpdate::HttpDate::from(modified)),
+            etag,
         }
     }
-}
 
-/// A consumed or absent handle maps to `NotFound`.
-fn gone() -> io::Error {
-    io::Error::from(io::ErrorKind::NotFound)
-}
-
-/// Wrapper delegating `AsyncRead`/`AsyncSeek` to a Tokio file converted from
-/// the prepared `std::fs::File`. Created at most once per request.
-pub(super) struct PreparedFile {
-    inner: tokio::fs::File,
-    metadata: std::fs::Metadata,
-}
-
-impl tokio::io::AsyncRead for PreparedFile {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    fn last_modified_value(&self) -> Option<HeaderValue> {
+        self.last_modified
+            .and_then(|date| HeaderValue::from_str(&date.to_string()).ok())
     }
 }
 
-impl tokio::io::AsyncSeek for PreparedFile {
-    fn start_seek(mut self: std::pin::Pin<&mut Self>, position: io::SeekFrom) -> io::Result<()> {
-        std::pin::Pin::new(&mut self.inner).start_seek(position)
-    }
-    fn poll_complete(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<io::Result<u64>> {
-        std::pin::Pin::new(&mut self.inner).poll_complete(cx)
-    }
+/// Trim leading and trailing optional whitespace per RFC 9110 §5.6.3.
+fn trim_ows(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| *byte != b' ' && *byte != b'\t')
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte != b' ' && *byte != b'\t')
+        .map_or(0, |index| index + 1);
+    bytes.get(start..end).unwrap_or_default()
 }
 
-impl TowerFile for PreparedFile {
-    type Metadata = std::fs::Metadata;
-    type MetadataFuture<'a> = std::future::Ready<io::Result<std::fs::Metadata>>;
-    fn metadata(&self) -> Self::MetadataFuture<'_> {
-        std::future::ready(Ok(self.metadata.clone()))
-    }
-}
-
-impl Backend for OneFileBackend {
-    type File = PreparedFile;
-    type Metadata = std::fs::Metadata;
-    type OpenFuture = std::future::Ready<io::Result<PreparedFile>>;
-    type MetadataFuture = std::future::Ready<io::Result<std::fs::Metadata>>;
-
-    fn open(&self, _path: PathBuf) -> Self::OpenFuture {
-        let taken = self
-            .file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        std::future::ready(match taken {
-            Some(file) => Ok(PreparedFile {
-                inner: tokio::fs::File::from_std(file),
-                metadata: self.metadata.clone(),
-            }),
-            None => Err(gone()),
-        })
-    }
-
-    fn metadata(&self, _path: PathBuf) -> Self::MetadataFuture {
-        std::future::ready(Ok(self.metadata.clone()))
-    }
-}
-
-/// Override `Content-Type` on 200/206 only, preserving 416 error bodies.
-fn set_content_type(response: &mut Response, original: &std::path::Path) {
-    let status = response.status().as_u16();
-    if status == 200 || status == 206 {
-        let mime = mime_guess::from_path(original).first_or_octet_stream();
-        if let Ok(value) = HeaderValue::from_str(mime.as_ref()) {
-            response.headers_mut().insert(header::CONTENT_TYPE, value);
+/// Visit every entity-tag in a comma separated list, honouring commas inside
+/// quoted strings (RFC 9110 §8.8.3). Short-circuits on the first match.
+fn for_each_etag(header: &[u8], mut predicate: impl FnMut(&[u8]) -> bool) -> bool {
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (index, byte) in header.iter().enumerate() {
+        match byte {
+            b'"' => in_quotes = !in_quotes,
+            b',' if !in_quotes => {
+                let candidate = trim_ows(header.get(start..index).unwrap_or_default());
+                if !candidate.is_empty() && predicate(candidate) {
+                    return true;
+                }
+                start = index + 1;
+            }
+            _ => {}
         }
     }
+    let candidate = trim_ows(header.get(start..).unwrap_or_default());
+    !candidate.is_empty() && predicate(candidate)
 }
 
-/// Decide whether the `If-Range` validator matches Tower's authoritative
-/// validators (from a metadata-only HEAD probe). Returns `true` when the range
-/// may be applied. Weak/malformed/multiple values never match.
-fn if_range_matches(
-    if_range_values: &[&HeaderValue],
-    etag: Option<&str>,
-    last_modified: Option<&str>,
-) -> bool {
-    // Exactly one value; malformed or multiple => no match.
-    let [single] = if_range_values else {
+/// Strong comparison per RFC 9110 §8.8.3.2.
+fn strong_eq(etag: &HeaderValue, candidate: &[u8]) -> bool {
+    !candidate.starts_with(b"W/") && etag.as_bytes() == candidate
+}
+
+/// Weak comparison per RFC 9110 §8.8.3.2.
+fn weak_eq(etag: &HeaderValue, candidate: &[u8]) -> bool {
+    let own = etag.as_bytes();
+    let own = own.strip_prefix(b"W/").unwrap_or(own);
+    let candidate = candidate.strip_prefix(b"W/").unwrap_or(candidate);
+    own == candidate
+}
+
+fn http_date(value: &HeaderValue) -> Option<httpdate::HttpDate> {
+    value.to_str().ok()?.parse().ok()
+}
+
+/// Outcome of evaluating the request preconditions.
+enum Precondition {
+    Proceed,
+    Failed,
+    NotModified,
+}
+
+/// RFC 9110 §13.2.2 precedence: `If-Match`, then `If-Unmodified-Since` only
+/// when `If-Match` is absent, then `If-None-Match`, then `If-Modified-Since`
+/// only when `If-None-Match` is absent.
+fn preconditions(headers: &HeaderMap, validators: &Validators) -> Precondition {
+    match headers.get(header::IF_MATCH).filter(|v| !v.is_empty()) {
+        Some(if_match) => {
+            let passes = validators.etag.as_ref().is_some_and(|etag| {
+                if_match.as_bytes() == b"*"
+                    || for_each_etag(if_match.as_bytes(), |tag| strong_eq(etag, tag))
+            });
+            if !passes {
+                return Precondition::Failed;
+            }
+        }
+        None => {
+            if let Some(since) = headers.get(header::IF_UNMODIFIED_SINCE).and_then(http_date)
+                && validators
+                    .last_modified
+                    .is_some_and(|modified| since < modified)
+            {
+                return Precondition::Failed;
+            }
+        }
+    }
+
+    match headers.get(header::IF_NONE_MATCH).filter(|v| !v.is_empty()) {
+        Some(if_none_match) => {
+            let passes = validators.etag.as_ref().is_none_or(|etag| {
+                if_none_match.as_bytes() != b"*"
+                    && !for_each_etag(if_none_match.as_bytes(), |tag| weak_eq(etag, tag))
+            });
+            if !passes {
+                return Precondition::NotModified;
+            }
+        }
+        None => {
+            if let Some(since) = headers.get(header::IF_MODIFIED_SINCE).and_then(http_date)
+                && validators
+                    .last_modified
+                    .is_some_and(|modified| since >= modified)
+            {
+                return Precondition::NotModified;
+            }
+        }
+    }
+
+    Precondition::Proceed
+}
+
+/// A parsed `Range` request against a known body size.
+enum RangeOutcome {
+    /// No usable range: serve the full body.
+    Absent,
+    Satisfiable(RangeInclusive<u64>),
+    Unsatisfiable,
+}
+
+/// Parse a single byte range. Multi-range requests are ignored (the server has
+/// never produced multipart responses), malformed or unsatisfiable ranges
+/// become 416.
+fn parse_range(raw: Option<&HeaderValue>, size: u64) -> RangeOutcome {
+    let Some(raw) = raw else {
+        return RangeOutcome::Absent;
+    };
+    let Ok(text) = raw.to_str() else {
+        return RangeOutcome::Absent;
+    };
+    let Ok(parsed) = http_range_header::parse_range_header(text) else {
+        return RangeOutcome::Unsatisfiable;
+    };
+    if parsed.ranges.len() > 1 {
+        return RangeOutcome::Absent;
+    }
+    match parsed.validate(size) {
+        Ok(mut ranges) => ranges.pop().map_or(RangeOutcome::Unsatisfiable, |range| {
+            RangeOutcome::Satisfiable(range)
+        }),
+        Err(_) => RangeOutcome::Unsatisfiable,
+    }
+}
+
+/// Decide whether an `If-Range` validator permits the range to be applied.
+/// Weak, malformed, repeated or non-matching validators fall back to the full
+/// body while the ordinary preconditions still apply.
+fn if_range_matches(values: &[&HeaderValue], validators: &Validators) -> bool {
+    let [single] = values else {
         return false;
     };
     let Ok(value) = single.to_str() else {
         return false;
     };
     let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    if value.starts_with("W/") {
-        // Weak validator never matches for If-Range.
+    if value.is_empty() || value.starts_with("W/") {
         return false;
     }
     if value.starts_with('"') {
-        // ETag form: strong, exact match against Tower's ETag.
-        if !value.ends_with('"') {
-            return false;
+        return value.ends_with('"')
+            && validators
+                .etag
+                .as_ref()
+                .is_some_and(|etag| etag.as_bytes() == value.as_bytes());
+    }
+    match (
+        validators.last_modified,
+        value.parse::<httpdate::HttpDate>(),
+    ) {
+        (Some(modified), Ok(parsed)) => modified == parsed,
+        _ => false,
+    }
+}
+
+/// The authorized bytes, either already in memory or still on the handle.
+enum Source {
+    Inline(Bytes),
+    Handle(std::fs::File),
+}
+
+impl Source {
+    /// Build the body for `length` bytes starting at `offset`.
+    fn body(self, offset: u64, length: u64) -> Body {
+        match self {
+            Self::Inline(bytes) => {
+                let start = usize::try_from(offset)
+                    .unwrap_or(usize::MAX)
+                    .min(bytes.len());
+                let end = usize::try_from(offset.saturating_add(length))
+                    .unwrap_or(usize::MAX)
+                    .min(bytes.len());
+                Body::from(bytes.slice(start..end))
+            }
+            Self::Handle(file) => Body::new(FileBody {
+                state: FileState::Idle(file),
+                seek: (offset > 0).then_some(offset),
+                remaining: length,
+            }),
         }
-        return etag == Some(value);
-    }
-    // HTTP-date form: exact parsed-date equality with Tower's Last-Modified.
-    let (Some(probe_lm), Ok(parsed)) = (last_modified, httpdate::parse_http_date(value)) else {
-        return false;
-    };
-    match httpdate::parse_http_date(probe_lm) {
-        Ok(probe) => probe == parsed,
-        Err(_) => false,
     }
 }
 
-/// Build a `ServeDir` over the single prepared handle with the synthetic URI.
-fn build_service(backend: OneFileBackend, request: Request) -> (OneFileServeDir, Request) {
-    let mut request = request;
-    *request.uri_mut() = Uri::from_static("/file");
-    let service = ServeDir::with_backend("", backend)
-        .append_index_html_on_directories(false)
-        .redirect_to_trailing_slash(false)
-        .ignore_multi_range_requests(true);
-    (service, request)
+enum FileState {
+    Idle(std::fs::File),
+    Reading(tokio::task::JoinHandle<io::Result<(std::fs::File, Vec<u8>)>>),
+    /// The file ended before `Content-Length` was satisfied. The next poll
+    /// reports the error instead of a clean end of stream.
+    Truncated,
+    Done,
 }
 
-fn error_response(error: &io::Error) -> Response {
-    let status = match error.kind() {
-        io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
-        io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    status.into_response()
+/// Streams a prepared handle in [`CHUNK`]-sized pieces, one blocking-pool
+/// handoff per piece.
+struct FileBody {
+    state: FileState,
+    seek: Option<u64>,
+    remaining: u64,
 }
 
-/// Serve the prepared handle, preserving `tower-http` `Range`/precondition
-/// semantics. MIME is detected from `original`, the request's logical path.
+impl Drop for FileBody {
+    fn drop(&mut self) {
+        // A disconnected client leaves a queued chunk read behind. Aborting
+        // keeps a worker from allocating and reading CHUNK bytes for a
+        // response nobody will receive.
+        if let FileState::Reading(handle) = &self.state {
+            handle.abort();
+        }
+    }
+}
+
+fn read_chunk(
+    mut file: std::fs::File,
+    seek: Option<u64>,
+    want: u64,
+) -> io::Result<(std::fs::File, Vec<u8>)> {
+    if let Some(offset) = seek {
+        file.seek(io::SeekFrom::Start(offset))?;
+    }
+    let mut buffer = Vec::with_capacity(usize::try_from(want).unwrap_or_default());
+    // `read_to_end` fills the spare capacity without zeroing it first.
+    io::Read::take(&file, want).read_to_end(&mut buffer)?;
+    Ok((file, buffer))
+}
+
+impl http_body::Body for FileBody {
+    type Data = Bytes;
+    type Error = io::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, io::Error>>> {
+        let this = self.get_mut();
+        loop {
+            match std::mem::replace(&mut this.state, FileState::Done) {
+                FileState::Done => return Poll::Ready(None),
+                FileState::Truncated => {
+                    return Poll::Ready(Some(Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "file shrank while it was being sent",
+                    ))));
+                }
+                FileState::Idle(file) => {
+                    if this.remaining == 0 {
+                        return Poll::Ready(None);
+                    }
+                    let want = this.remaining.min(CHUNK);
+                    let seek = this.seek.take();
+                    this.state = FileState::Reading(tokio::task::spawn_blocking(move || {
+                        read_chunk(file, seek, want)
+                    }));
+                }
+                FileState::Reading(mut handle) => {
+                    let polled = Pin::new(&mut handle).poll(cx);
+                    let joined = match polled {
+                        Poll::Pending => {
+                            this.state = FileState::Reading(handle);
+                            return Poll::Pending;
+                        }
+                        Poll::Ready(joined) => joined,
+                    };
+                    let (file, buffer) = match joined {
+                        Ok(Ok(read)) => read,
+                        Ok(Err(error)) => return Poll::Ready(Some(Err(error))),
+                        Err(error) => return Poll::Ready(Some(Err(io::Error::other(error)))),
+                    };
+                    let want = this.remaining.min(CHUNK);
+                    let read = u64::try_from(buffer.len()).unwrap_or_default();
+                    this.remaining = this.remaining.saturating_sub(read);
+                    // A short read means `read_to_end` already hit EOF, so the
+                    // advertised Content-Length can no longer be met. Signalling
+                    // an error (rather than a clean end of stream) is what makes
+                    // HTTP/2 reset the stream instead of delivering a silently
+                    // truncated 200.
+                    if read < want {
+                        if this.remaining == 0 {
+                            return Poll::Ready(None);
+                        }
+                        this.state = FileState::Truncated;
+                    } else {
+                        this.state = FileState::Idle(file);
+                    }
+                    if buffer.is_empty() {
+                        continue;
+                    }
+                    return Poll::Ready(Some(Ok(Frame::data(Bytes::from(buffer)))));
+                }
+            }
+        }
+    }
+
+    // Deliberately no `is_end_stream`/`size_hint` override: the framing must
+    // stay driven by the explicit `Content-Length`, which also keeps the
+    // header order identical for zero-length bodies.
+}
+
+/// Insert the headers every successful response carries, in the order the
+/// server has always emitted them.
+fn common_headers(headers: &mut HeaderMap, mime: Option<&HeaderValue>, validators: &Validators) {
+    if let Some(mime) = mime {
+        headers.insert(header::CONTENT_TYPE, mime.clone());
+    }
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some(last_modified) = validators.last_modified_value() {
+        headers.insert(header::LAST_MODIFIED, last_modified);
+    }
+    if let Some(etag) = validators.etag.clone() {
+        headers.insert(header::ETAG, etag);
+    }
+}
+
+/// Serve the prepared handle.
 ///
-/// One `Backend`/`ServeDir` is created once and used for both an optional
-/// metadata-only HEAD probe (which never consumes the file) and the actual
-/// request. For `GET` with `Range` + `If-Range`, the probe removes
-/// `Range`/`If-Range` and all four conditional headers to obtain Tower's
-/// authoritative `ETag`/`Last-Modified`; the range is applied only on a
-/// strong/exact match, otherwise `Range` is stripped for a full-body fallback
-/// while the original preconditions remain.
+/// `inline` carries the complete body when the resolving blocking job already
+/// read it. `original` is the request's logical path and decides the MIME type.
 pub(super) fn serve(
     opened: Opened,
-    original: &std::path::Path,
-    mut request: Request,
-) -> impl Future<Output = Response> + Send + '_ {
-    let original = original.to_path_buf();
-    let backend = OneFileBackend::new(opened);
-    let is_get = request.method() == Method::GET;
+    inline: Option<Vec<u8>>,
+    original: &Path,
+    request: &Request,
+) -> Response {
+    let Opened { file, metadata } = opened;
+    let size = metadata.len();
+    let validators = Validators::new(&metadata);
+    let headers = request.headers();
     let is_head = request.method() == Method::HEAD;
-    let mut if_range_raw: Vec<HeaderValue> = request
-        .headers()
-        .get_all(header::IF_RANGE)
-        .iter()
-        .cloned()
-        .collect();
-    let has_range = request.headers().contains_key(header::RANGE);
 
-    async move {
-        // HEAD never honors Range; conditionals are preserved.
-        if is_head {
-            request.headers_mut().remove(header::RANGE);
-            request.headers_mut().remove(header::IF_RANGE);
-        }
-
-        // GET + Range + If-Range: metadata-only HEAD probe on the same backend.
-        let mut strip_range = false;
-        if is_get && has_range && !if_range_raw.is_empty() {
-            // Metadata-only HEAD probe: no Range/If-Range, no conditionals.
-            let mut probe_headers = request.headers().clone();
-            probe_headers.remove(header::RANGE);
-            probe_headers.remove(header::IF_RANGE);
-            probe_headers.remove(header::IF_MATCH);
-            probe_headers.remove(header::IF_NONE_MATCH);
-            probe_headers.remove(header::IF_MODIFIED_SINCE);
-            probe_headers.remove(header::IF_UNMODIFIED_SINCE);
-            let mut probe = Request::new(Body::empty());
-            *probe.method_mut() = Method::HEAD;
-            *probe.uri_mut() = request.uri().clone();
-            *probe.version_mut() = request.version();
-            *probe.headers_mut() = probe_headers;
-            let (mut probe_service, probe) = build_service(backend.clone(), probe);
-            let (mut etag, mut last_modified) = (None, None);
-            if let Ok(resp) = probe_service.try_call(probe).await {
-                etag = resp
-                    .headers()
-                    .get(header::ETAG)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
-                last_modified = resp
-                    .headers()
-                    .get(header::LAST_MODIFIED)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
+    match preconditions(headers, &validators) {
+        Precondition::Failed => return StatusCode::PRECONDITION_FAILED.into_response(),
+        Precondition::NotModified => {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            let target = response.headers_mut();
+            if let Some(etag) = validators.etag.clone() {
+                target.insert(header::ETAG, etag);
             }
-            let refs: Vec<&HeaderValue> = if_range_raw.iter().collect();
-            strip_range = !if_range_matches(&refs, etag.as_deref(), last_modified.as_deref());
-        }
-
-        if strip_range {
-            request.headers_mut().remove(header::RANGE);
-            request.headers_mut().remove(header::IF_RANGE);
-            if_range_raw.clear();
-        }
-
-        let (mut service, request) = build_service(backend, request);
-        match service.try_call(request).await {
-            Ok(response) => {
-                let (parts, body) = response.into_parts();
-                let mut response = Response::from_parts(parts, Body::new(body));
-                set_content_type(&mut response, &original);
-                response
+            if let Some(last_modified) = validators.last_modified_value() {
+                target.insert(header::LAST_MODIFIED, last_modified);
             }
-            Err(error) => error_response(&error),
+            return response;
         }
+        Precondition::Proceed => {}
     }
+
+    // HEAD never honours `Range`, so `If-Range` cannot apply either.
+    //
+    // RFC 9110 §13.1.5: a failing `If-Range` makes the server ignore `Range`
+    // entirely, so it is evaluated BEFORE parsing. Deciding it afterwards
+    // would let an unsatisfiable or malformed range still produce 416.
+    let range = if is_head {
+        RangeOutcome::Absent
+    } else {
+        let raw = headers.get(header::RANGE);
+        let if_range: Vec<&HeaderValue> = headers.get_all(header::IF_RANGE).iter().collect();
+        if raw.is_some() && !if_range.is_empty() && !if_range_matches(&if_range, &validators) {
+            RangeOutcome::Absent
+        } else {
+            parse_range(raw, size)
+        }
+    };
+
+    let mime = mime_guess::from_path(original).first_or_octet_stream();
+    let mime = HeaderValue::from_str(mime.as_ref())
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+
+    if let RangeOutcome::Unsatisfiable = range {
+        // Insert `Content-Type` and drop it again so the remaining fields keep
+        // the exact order the server has always produced for 416.
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+        let target = response.headers_mut();
+        common_headers(target, Some(&mime), &validators);
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes */{size}")) {
+            target.insert(header::CONTENT_RANGE, value);
+        }
+        target.remove(header::CONTENT_TYPE);
+        return response;
+    }
+
+    let source = match inline {
+        Some(body) => Source::Inline(Bytes::from(body)),
+        None => Source::Handle(file),
+    };
+
+    let (status, offset, length, content_range) = match range {
+        RangeOutcome::Satisfiable(range) => {
+            let (start, end) = (*range.start(), *range.end());
+            let length = if size == 0 { 0 } else { end - start + 1 };
+            (
+                StatusCode::PARTIAL_CONTENT,
+                start,
+                length,
+                HeaderValue::from_str(&format!("bytes {start}-{end}/{size}")).ok(),
+            )
+        }
+        _ => (StatusCode::OK, 0, size, None),
+    };
+
+    let body = if is_head {
+        Body::empty()
+    } else {
+        source.body(offset, length)
+    };
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    let target = response.headers_mut();
+    common_headers(target, Some(&mime), &validators);
+    if let Some(content_range) = content_range {
+        target.insert(header::CONTENT_RANGE, content_range);
+    }
+    target.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    response
 }

@@ -155,7 +155,17 @@ just bench-http
 just bench-https
 ```
 
-The benchmark runner (`examples/bench.rs`) builds the release binary, generates temporary `1 KiB`, `100 KiB`, `4 MiB`, and 200-entry directory fixtures, pins server and client CPU sets with `taskset`, and compares `TCP_NODELAY` enabled vs. disabled across concurrencies `1`, `16`, `64`, and `128`. Raw `oha` JSON, `results.json`, `samples.csv`, and `summary.txt` are written under `target/benchmarks/`.
+The benchmark runner (`examples/bench.rs`) builds the release binary, generates temporary `1 KiB`, `100 KiB`, `4 MiB`, and 200-entry directory fixtures, pins server and client CPU sets with `taskset`, and measures GET, HEAD, conditional (`304`), and byte-range (`206`) workloads over HTTP and localhost HTTPS with keep-alive enabled and disabled, comparing `TCP_NODELAY` enabled vs. disabled across concurrencies `1`, `16`, `64`, and `128`. Besides requests/sec, throughput, latency percentiles, CPU, and RSS it records per-request read/write syscalls and context switches from `/proc`, summed across every server thread.
+
+The load generator never runs on an SMT sibling of a server CPU, so the two processes cannot compete for the same physical cores. Samples that saw an unexpected status or a transport error stay in the raw output but are excluded from published medians and ratios. The `nagle` variant applies only to the `rust` implementation, the one that reads `WWW_BENCH_DISABLE_TCP_NODELAY`; external binaries are measured under their own default socket configuration.
+
+Any other prebuilt server that accepts `-p <port> -r <root> -q [-s localhost]` can be benchmarked side by side with `--server LABEL=PATH` (repeatable); `--servers LIST` selects and orders the labels to run. The implicit `rust` label is always the working-tree release build:
+
+```sh
+just bench --server go=/tmp/www-go --servers rust,go
+```
+
+Results are grouped per case and implementation (medians across rounds, never averaged across cases or implementations) and include a `rust/go` req/s ratio when both labels run. Raw `oha` JSON, `results.json`, `samples.csv`, and `summary.txt` are written under `target/benchmarks/`.
 
 ## Container
 

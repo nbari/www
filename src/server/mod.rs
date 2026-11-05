@@ -32,6 +32,7 @@ pub struct ServerConfig {
 struct Files {
     root: PathBuf,
     protected: Option<Arc<fs::Protected>>,
+    dispatch: Arc<directory::Dispatch>,
 }
 
 /// Build the HTTP service independently of CLI parsing and TLS transport.
@@ -109,6 +110,7 @@ async fn router_with_protected(
         .with_state(Arc::new(Files {
             root: canonical_root,
             protected,
+            dispatch: Arc::new(directory::Dispatch::new()),
         }))
         .layer(middleware::from_fn(log_request)))
 }
@@ -117,10 +119,15 @@ async fn files(State(files): State<Arc<Files>>, request: Request) -> Response {
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return (StatusCode::METHOD_NOT_ALLOWED, [("allow", "GET, HEAD")]).into_response();
     }
-    directory::serve(&files, request).await
+    directory::serve(files, request).await
 }
 
 async fn log_request(request: Request, next: Next) -> Response {
+    // Quiet mode filters the event out; skip the clock reads and the field
+    // capture entirely instead of building a record nobody consumes.
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return next.run(request).await;
+    }
     let start = Instant::now();
     let client = request
         .extensions()
