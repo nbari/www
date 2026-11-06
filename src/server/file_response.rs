@@ -764,6 +764,38 @@ mod body_tests {
         Ok(())
     }
 
+    /// With the ceiling fully taken, a body still streams: it takes the
+    /// minimum chunk without a reservation rather than failing the request.
+    #[tokio::test]
+    async fn an_exhausted_budget_still_serves_the_body() -> Result<(), io::Error> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("exhausted.bin");
+        let len = MIN_CHUNK * 2;
+        std::fs::write(&path, vec![9_u8; usize::try_from(len).unwrap_or_default()])?;
+
+        // A ceiling of zero can never admit a reservation.
+        let budget = Arc::new(BodyBudget::new(0));
+        let mut body = FileBody {
+            state: FileState::Idle(std::fs::File::open(&path)?),
+            seek: None,
+            remaining: len,
+            chunk: MIN_CHUNK,
+            reserved: 0,
+            budget: Arc::clone(&budget),
+        };
+        assert_eq!(budget.acquire(CHUNK), (MIN_CHUNK, 0), "nothing is reserved");
+        assert_eq!(budget.in_use(), 0);
+
+        let mut total = 0_u64;
+        while let Some(chunk) = next_frame(&mut body).await {
+            let chunk = chunk?;
+            assert!(u64::try_from(chunk.len()).unwrap_or_default() <= MIN_CHUNK);
+            total += u64::try_from(chunk.len()).unwrap_or_default();
+        }
+        assert_eq!(total, len, "an exhausted budget must not truncate the body");
+        Ok(())
+    }
+
     /// A range body seeks once and then stops at the requested length rather
     /// than running to end of file.
     #[tokio::test]

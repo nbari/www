@@ -563,6 +563,30 @@ mod dispatch_tests {
         );
     }
 
+    /// When the cooldown expires, exactly one caller is admitted to probe the
+    /// filesystem. Letting every worker probe at once would be as damaging as
+    /// never backing off at all.
+    #[test]
+    fn cooldown_expiry_admits_exactly_one_probe() {
+        let dispatch = Dispatch::with_limits(4, Duration::from_millis(1));
+        dispatch.observe(Duration::from_millis(1));
+        assert!(dispatch.try_inline().is_none(), "the cooldown is in force");
+
+        // Move the deadline into the past: the cooldown has just expired.
+        dispatch
+            .blocking_until
+            .store(dispatch.now_nanos(), Ordering::Relaxed);
+        assert!(dispatch.try_inline().is_some(), "one probe is admitted");
+        assert!(
+            dispatch.try_inline().is_none(),
+            "a second probe must wait for the next expiry"
+        );
+
+        // A fast probe clears the cooldown and reopens the fast path.
+        dispatch.observe(Duration::from_micros(1));
+        assert!(dispatch.try_inline().is_some());
+    }
+
     /// A slow resolution must move the whole server onto the blocking pool,
     /// and the cooldown must expire on its own.
     #[test]
