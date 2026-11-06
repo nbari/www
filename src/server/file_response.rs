@@ -141,50 +141,66 @@ enum Precondition {
     NotModified,
 }
 
+/// Whether any entity-tag across every field line of `name` satisfies
+/// `predicate`. RFC 9110 §5.3: repeated field lines are equivalent to one
+/// comma-joined list, so all of them are consulted, not just the first.
+fn any_etag(
+    headers: &HeaderMap,
+    name: header::HeaderName,
+    mut predicate: impl FnMut(&[u8]) -> bool,
+) -> bool {
+    headers
+        .get_all(name)
+        .iter()
+        .any(|value| for_each_etag(value.as_bytes(), &mut predicate))
+}
+
+/// Whether `name` is present as a wildcard across any of its field lines.
+fn has_wildcard(headers: &HeaderMap, name: header::HeaderName) -> bool {
+    headers
+        .get_all(name)
+        .iter()
+        .any(|value| trim_ows(value.as_bytes()) == b"*")
+}
+
 /// RFC 9110 §13.2.2 precedence: `If-Match`, then `If-Unmodified-Since` only
 /// when `If-Match` is absent, then `If-None-Match`, then `If-Modified-Since`
 /// only when `If-None-Match` is absent.
+///
+/// A present-but-empty field is still present: it carries an empty list that
+/// nothing can match, and it still suppresses the date-based condition below
+/// it.
 fn preconditions(headers: &HeaderMap, validators: &Validators) -> Precondition {
-    match headers.get(header::IF_MATCH).filter(|v| !v.is_empty()) {
-        Some(if_match) => {
-            let passes = validators.etag.as_ref().is_some_and(|etag| {
-                if_match.as_bytes() == b"*"
-                    || for_each_etag(if_match.as_bytes(), |tag| strong_eq(etag, tag))
-            });
-            if !passes {
-                return Precondition::Failed;
-            }
+    if headers.contains_key(header::IF_MATCH) {
+        let passes = validators.etag.as_ref().is_some_and(|etag| {
+            has_wildcard(headers, header::IF_MATCH)
+                || any_etag(headers, header::IF_MATCH, |tag| strong_eq(etag, tag))
+        });
+        if !passes {
+            return Precondition::Failed;
         }
-        None => {
-            if let Some(since) = headers.get(header::IF_UNMODIFIED_SINCE).and_then(http_date)
-                && validators
-                    .last_modified
-                    .is_some_and(|modified| since < modified)
-            {
-                return Precondition::Failed;
-            }
-        }
+    } else if let Some(since) = headers.get(header::IF_UNMODIFIED_SINCE).and_then(http_date)
+        && validators
+            .last_modified
+            .is_some_and(|modified| since < modified)
+    {
+        return Precondition::Failed;
     }
 
-    match headers.get(header::IF_NONE_MATCH).filter(|v| !v.is_empty()) {
-        Some(if_none_match) => {
-            let passes = validators.etag.as_ref().is_none_or(|etag| {
-                if_none_match.as_bytes() != b"*"
-                    && !for_each_etag(if_none_match.as_bytes(), |tag| weak_eq(etag, tag))
-            });
-            if !passes {
-                return Precondition::NotModified;
-            }
+    if headers.contains_key(header::IF_NONE_MATCH) {
+        let passes = validators.etag.as_ref().is_none_or(|etag| {
+            !has_wildcard(headers, header::IF_NONE_MATCH)
+                && !any_etag(headers, header::IF_NONE_MATCH, |tag| weak_eq(etag, tag))
+        });
+        if !passes {
+            return Precondition::NotModified;
         }
-        None => {
-            if let Some(since) = headers.get(header::IF_MODIFIED_SINCE).and_then(http_date)
-                && validators
-                    .last_modified
-                    .is_some_and(|modified| since >= modified)
-            {
-                return Precondition::NotModified;
-            }
-        }
+    } else if let Some(since) = headers.get(header::IF_MODIFIED_SINCE).and_then(http_date)
+        && validators
+            .last_modified
+            .is_some_and(|modified| since >= modified)
+    {
+        return Precondition::NotModified;
     }
 
     Precondition::Proceed
@@ -198,9 +214,13 @@ enum RangeOutcome {
     Unsatisfiable,
 }
 
-/// Parse a single byte range. Multi-range requests are ignored (the server has
-/// never produced multipart responses), malformed or unsatisfiable ranges
-/// become 416.
+/// Parse a single byte range.
+///
+/// RFC 9110 §14.2: a range unit the server does not understand must be
+/// ignored, not rejected. §14.1.2: a suffix length larger than the
+/// representation selects the whole representation. A zero-length
+/// representation can satisfy no byte range at all. Multi-range requests are
+/// ignored because the server has never produced multipart responses.
 fn parse_range(raw: Option<&HeaderValue>, size: u64) -> RangeOutcome {
     let Some(raw) = raw else {
         return RangeOutcome::Absent;
@@ -208,18 +228,47 @@ fn parse_range(raw: Option<&HeaderValue>, size: u64) -> RangeOutcome {
     let Ok(text) = raw.to_str() else {
         return RangeOutcome::Absent;
     };
-    let Ok(parsed) = http_range_header::parse_range_header(text) else {
+    // The range unit is a case-insensitive token; anything but `bytes` is
+    // ignored, and the parser only accepts the canonical spelling.
+    let Some((unit, spec)) = text.split_once('=') else {
+        return RangeOutcome::Unsatisfiable;
+    };
+    let spec = spec.trim();
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return RangeOutcome::Absent;
+    }
+    // The canonical spelling is parsed in place; only a differently-cased
+    // unit needs a normalized copy.
+    let normalized;
+    let canonical = if unit == "bytes" {
+        text
+    } else {
+        normalized = format!("bytes={spec}");
+        &normalized
+    };
+    let Ok(parsed) = http_range_header::parse_range_header(canonical) else {
         return RangeOutcome::Unsatisfiable;
     };
     if parsed.ranges.len() > 1 {
         return RangeOutcome::Absent;
     }
-    match parsed.validate(size) {
-        Ok(mut ranges) => ranges.pop().map_or(RangeOutcome::Unsatisfiable, |range| {
-            RangeOutcome::Satisfiable(range)
-        }),
-        Err(_) => RangeOutcome::Unsatisfiable,
+    if size == 0 {
+        return RangeOutcome::Unsatisfiable;
     }
+    if let Ok(mut ranges) = parsed.validate(size)
+        && let Some(range) = ranges.pop()
+    {
+        return RangeOutcome::Satisfiable(range);
+    }
+    // A suffix length beyond the representation is not an error: it selects
+    // everything. This is the only recoverable validation rejection.
+    if let Some(length) = spec.trim().strip_prefix('-')
+        && let Ok(length) = length.trim().parse::<u64>()
+        && length >= size
+    {
+        return RangeOutcome::Satisfiable(0..=size - 1);
+    }
+    RangeOutcome::Unsatisfiable
 }
 
 /// Decide whether an `If-Range` validator permits the range to be applied.

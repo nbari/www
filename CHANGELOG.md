@@ -5,6 +5,9 @@
 * Stream larger bodies in 128 KiB chunks, chosen by measurement to keep the memory a slow client can pin close to the smallest chunk size, and report a truncated file as an error instead of a short but successful response.
 * Drop validators instead of panicking when a file's modification time cannot be represented as an HTTP date.
 * Ignore an unsatisfiable or malformed `Range` when `If-Range` does not match, instead of answering `416`.
+* Ignore a `Range` whose unit is not `bytes` instead of answering `416`, serve the whole representation for a suffix range longer than the file, and reject every byte range against a zero-length file.
+* Combine repeated `If-Match` and `If-None-Match` field lines, and treat a present-but-empty one as a list that nothing matches.
+* Return `500` instead of dropping the connection if a resolution panics.
 * Cancel a queued chunk read when the client disconnects mid-response.
 * Benchmark side by side against any prebuilt server with `--server LABEL=PATH`, isolate the load generator from the server's SMT siblings, and exclude samples with errors from published medians.
 

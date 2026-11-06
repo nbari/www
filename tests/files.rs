@@ -590,6 +590,155 @@ async fn pre_epoch_modification_time_drops_validators_without_panicking() -> Res
     Ok(())
 }
 
+/// Read the `ETag` the server generates for `/file.txt`.
+async fn etag_of(app: &Router) -> Result<String> {
+    let response = request(app, "HEAD", "/file.txt", &[]).await?;
+    Ok(response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned())
+}
+
+/// RFC 9110 §14.2: a `Range` whose unit the server does not implement must be
+/// ignored, not rejected. Answering 416 denies the whole representation to a
+/// client that merely asked in units we do not speak.
+#[tokio::test]
+async fn unknown_range_units_are_ignored_rather_than_rejected() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("file.txt"), "0123456789")?;
+    touch_past(&root.path().join("file.txt"))?;
+    let app = app(root.path()).await?;
+
+    // The unit is a token: a trailing space before `=` is malformed, and a
+    // malformed unit is ignored exactly like an unknown one.
+    for unit in ["items=0-1", "seconds=0-1", "BYTESS=0-1", "bytes =0-1"] {
+        let response = request(&app, "GET", "/file.txt", &[("range", unit)]).await?;
+        assert_eq!(response.status(), StatusCode::OK, "range {unit}");
+        assert_eq!(
+            response.headers().get("content-range"),
+            None,
+            "range {unit}"
+        );
+        assert_eq!(text(response).await?, "0123456789", "range {unit}");
+    }
+
+    // The unit is case-insensitive, so `bytes` in any case still applies.
+    let response = request(&app, "GET", "/file.txt", &[("range", "BYTES=2-5")]).await?;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(text(response).await?, "2345");
+    Ok(())
+}
+
+/// RFC 9110 §14.1.2: when the suffix length is at least the representation
+/// length, the whole representation is selected.
+#[tokio::test]
+async fn suffix_range_longer_than_the_file_serves_everything() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("file.txt"), "0123456789")?;
+    touch_past(&root.path().join("file.txt"))?;
+    let app = app(root.path()).await?;
+
+    for suffix in ["bytes=-10", "bytes=-11", "bytes=-9999"] {
+        let response = request(&app, "GET", "/file.txt", &[("range", suffix)]).await?;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT, "{suffix}");
+        assert_eq!(
+            response
+                .headers()
+                .get("content-range")
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes 0-9/10"),
+            "{suffix}"
+        );
+        assert_eq!(text(response).await?, "0123456789", "{suffix}");
+    }
+
+    // A suffix inside the representation still selects only its tail.
+    let response = request(&app, "GET", "/file.txt", &[("range", "bytes=-3")]).await?;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(text(response).await?, "789");
+    Ok(())
+}
+
+/// A zero-length representation satisfies no byte range, so every byte range
+/// against it is 416 instead of the nonsensical `bytes 0-0/0` partial content.
+#[tokio::test]
+async fn byte_ranges_on_an_empty_file_are_unsatisfiable() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("file.txt"), "")?;
+    touch_past(&root.path().join("file.txt"))?;
+    let app = app(root.path()).await?;
+
+    for range in ["bytes=0-", "bytes=0-0", "bytes=0-99", "bytes=-1"] {
+        let response = request(&app, "GET", "/file.txt", &[("range", range)]).await?;
+        assert_eq!(
+            response.status(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "range {range}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-range")
+                .and_then(|value| value.to_str().ok()),
+            Some("bytes */0"),
+            "range {range}"
+        );
+    }
+    Ok(())
+}
+
+/// RFC 9110 §5.3 and §13.1: repeated field lines are one comma-joined list,
+/// and a present-but-empty list is still present. Consulting only the first
+/// line silently ignores validators the client sent.
+#[tokio::test]
+async fn conditional_fields_combine_across_lines_and_honour_empty_values() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("file.txt"), "0123456789")?;
+    touch_past(&root.path().join("file.txt"))?;
+    let app = app(root.path()).await?;
+    let etag = etag_of(&app).await?;
+    assert_ne!(etag, "");
+
+    // A match on the second line counts.
+    let response = request(
+        &app,
+        "GET",
+        "/file.txt",
+        &[("if-none-match", "\"other\""), ("if-none-match", &etag)],
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+    let response = request(
+        &app,
+        "GET",
+        "/file.txt",
+        &[("if-match", "\"other\""), ("if-match", &etag)],
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // An empty list can never match: If-Match fails, If-None-Match passes.
+    let response = request(&app, "GET", "/file.txt", &[("if-match", "")]).await?;
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    // A present If-None-Match still suppresses If-Modified-Since below it.
+    let response = request(
+        &app,
+        "GET",
+        "/file.txt",
+        &[
+            ("if-none-match", ""),
+            ("if-modified-since", "Thu, 01 Jan 2099 00:00:00 GMT"),
+        ],
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
 // APFS rejects invalid UTF-8 names when creating the fixture (EILSEQ).
 #[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]

@@ -236,12 +236,23 @@ fn negotiated(headers: &axum::http::HeaderMap) -> bool {
 }
 
 /// How long one resolution may take before the filesystem is treated as slow.
-/// A page-cache hit resolves in single-digit microseconds; a millisecond means
-/// real device or network I/O.
+///
+/// A page-cache hit resolves in single-digit microseconds, so anything here
+/// above that is "far from the fast path". 250 us was tried and measured
+/// worse: ordinary scheduling outliers crossed it, and each false positive
+/// costs a full cooldown on the blocking pool, which cut small-file
+/// throughput from 244k to 170k req/s and raised context switches per
+/// request from 0.16 to 1.1. A millisecond is clear of that noise while
+/// still far below any real device or network round trip.
 const SLOW_RESOLVE: Duration = Duration::from_millis(1);
 
 /// How long to keep using the blocking pool after a slow resolution.
 const SLOW_COOLDOWN: Duration = Duration::from_secs(1);
+
+/// [`SLOW_COOLDOWN`] in nanoseconds, saturating.
+fn cooldown_nanos() -> u64 {
+    u64::try_from(SLOW_COOLDOWN.as_nanos()).unwrap_or(u64::MAX)
+}
 
 /// Chooses between resolving on the runtime thread and on the blocking pool.
 ///
@@ -303,8 +314,23 @@ impl Dispatch {
 
     /// Reserve a slot for an inline resolution, or `None` to use the pool.
     fn try_inline(&self) -> Option<InlineSlot<'_>> {
-        if !self.inline_allowed() {
-            return None;
+        let until = self.blocking_until.load(Ordering::Relaxed);
+        if until != 0 {
+            let now = self.now_nanos();
+            if now < until {
+                return None;
+            }
+            // The cooldown expired. Exactly one caller becomes the probe, by
+            // claiming the deadline; everyone else keeps using the pool. A
+            // burst of probes would be as damaging as never backing off.
+            let next = now.saturating_add(cooldown_nanos());
+            if self
+                .blocking_until
+                .compare_exchange(until, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                return None;
+            }
         }
         if self.in_flight.fetch_add(1, Ordering::Acquire) >= self.limit {
             self.in_flight.fetch_sub(1, Ordering::Release);
@@ -313,6 +339,9 @@ impl Dispatch {
         Some(InlineSlot(self))
     }
 
+    /// Whether the fast path is currently open. Only the tests need to ask;
+    /// `try_inline` folds this into its slot acquisition.
+    #[cfg(test)]
     fn inline_allowed(&self) -> bool {
         let until = self.blocking_until.load(Ordering::Relaxed);
         until == 0 || self.now_nanos() >= until
@@ -322,16 +351,19 @@ impl Dispatch {
         u64::try_from(self.base.elapsed().as_nanos()).unwrap_or(u64::MAX)
     }
 
-    /// Record how long an inline resolution took, switching to the blocking
-    /// pool when the filesystem turns out to be slow. `fetch_max` keeps two
-    /// concurrent observations from moving the deadline backwards.
+    /// Record how long an inline resolution took. A slow one puts the server
+    /// on the blocking pool; a fast one clears an outstanding cooldown, which
+    /// is how the probe admitted by `try_inline` restores the fast path.
+    /// `fetch_max` keeps two concurrent observations from moving the deadline
+    /// backwards.
     fn observe(&self, elapsed: Duration) {
         if elapsed < self.slow {
+            if self.blocking_until.load(Ordering::Relaxed) != 0 {
+                self.blocking_until.store(0, Ordering::Relaxed);
+            }
             return;
         }
-        let until = self
-            .now_nanos()
-            .saturating_add(u64::try_from(SLOW_COOLDOWN.as_nanos()).unwrap_or(u64::MAX));
+        let until = self.now_nanos().saturating_add(cooldown_nanos());
         self.blocking_until.fetch_max(until, Ordering::Relaxed);
     }
 }
@@ -348,15 +380,23 @@ pub(super) async fn serve(files: Arc<Files>, request: Request) -> Response {
     let inline = !head && !negotiated(request.headers());
     let resolved = if let Some(slot) = files.dispatch.try_inline() {
         // Warm page cache: the handoff would cost more than the syscalls.
+        //
+        // The blocking pool turned a panic into a `JoinError` and then a 500.
+        // Catching it here keeps that behaviour instead of unwinding through
+        // the connection task, which would drop the connection with no
+        // response at all.
         let started = Instant::now();
-        let resolved = resolve(&files, path, url_slash, index_exact, inline);
+        let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            resolve(&files, path, url_slash, index_exact, inline)
+        }));
         files.dispatch.observe(started.elapsed());
         drop(slot);
-        Ok(resolved)
+        resolved.map_err(|_| io::Error::other("resolution panicked"))
     } else {
         let files = Arc::clone(&files);
         tokio::task::spawn_blocking(move || resolve(&files, path, url_slash, index_exact, inline))
             .await
+            .map_err(io::Error::other)
     };
     match resolved {
         Err(err) => error(&io::Error::other(err)),
