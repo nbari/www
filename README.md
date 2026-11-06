@@ -6,7 +6,98 @@
 
 # www
 
-A static HTTP and HTTPS web server written in Rust. Run `www` to share the current directory over HTTP on port 8000.
+A simple static web server written in Rust. Run `www` to serve the current directory over HTTP on port 8000, with HTTPS available when you need it.
+
+## Why?
+
+To make starting a web server as simple as running one command. The project began with the need to share files and test the contents of a directory over HTTP, without setting up a web framework or writing a configuration file.
+
+If you usually reach for:
+
+```sh
+python3 -m http.server 8000
+```
+
+Use `www` as a standalone alternative:
+
+```sh
+www
+```
+
+Open <http://localhost:8000/> to browse the current directory. Serve a different directory with `-r`, choose a port with `-p`, or add HTTPS with `-s localhost` for local testing and `-s DOMAIN` for automatic Let's Encrypt certificates.
+
+## Install
+
+### With Cargo
+
+If you have Rust 1.88+ and Cargo (Rust's package manager) installed:
+
+```sh
+cargo install www --locked
+```
+
+Cargo installs the executable into `~/.cargo/bin` by default. Make sure that directory is in your `PATH` so your shell can find `www`.
+
+### Without Rust
+
+Download an archive or package for your operating system and CPU architecture from [GitHub Releases](https://github.com/nbari/www/releases). Prebuilt binaries do not require Rust or Python to run.
+
+For a `.tar.gz` archive, extract it and run `./www` from the extracted directory, or place the `www` executable in a directory on your `PATH` to run it from anywhere. DEB and RPM packages install the command through your system's package manager.
+
+Available builds cover Linux (`x86_64`, `i686`, and `aarch64` GNU archives; static `musl` archives and DEB/RPM packages on `x86_64` and `aarch64`), FreeBSD (`x86_64`, `i686`, `aarch64`), and macOS (`x86_64`, `aarch64`).
+
+### From a source checkout
+
+Requires Git, Rust 1.88+, and the `just` command runner:
+
+```sh
+git clone https://github.com/nbari/www.git
+cd www
+just build
+just install "$HOME/.local"
+```
+
+Make sure `~/.local/bin` is in your `PATH`.
+
+## Quick start
+
+In a terminal, change to the directory you want to serve and run:
+
+```sh
+www
+```
+
+Open <http://localhost:8000/> in your browser. If the directory contains `index.html`, you will see that page; otherwise, you will see a list of files. Keep the terminal running while you browse, and press **Ctrl+C** to stop the server.
+
+`www` serves static files, such as HTML, CSS, JavaScript, images, and downloads. It does not execute server-side code such as PHP or Python.
+
+By default, the server also accepts connections from other machines. On the same network, open `http://<server-ip>:8000/`, replacing `<server-ip>` with the serving machine's network IP address; your firewall must allow the connection. Share only directories intended for others to access, including their hidden files and linked files; see [Security](#security).
+
+### Common examples
+
+Run each example separately, stopping a running server with **Ctrl+C** before starting another.
+
+Serve a different directory on port 8080 (also useful when port 8000 is already in use):
+
+```sh
+www -r /path/to/files -p 8080
+```
+
+Open <http://localhost:8080/>. Replace `/path/to/files` with an existing directory.
+
+For a local preview accessible only from your own machine:
+
+```sh
+www --bind 127.0.0.1 -r ./public -p 8080
+```
+
+Open <http://127.0.0.1:8080/>. Here and in later examples, replace `./public` with your site's existing directory.
+
+To suppress startup and request logs:
+
+```sh
+www -q -r ./public
+```
 
 ## Features
 
@@ -16,32 +107,6 @@ A static HTTP and HTTPS web server written in Rust. Run `www` to share the curre
 - Automatic Let's Encrypt HTTPS via TLS-ALPN-01 on port 443 with background renewal and private atomic certificate caching.
 - Dual-stack IPv4/IPv6 listener with `TCP_NODELAY` enabled across HTTP, localhost HTTPS, and ACME HTTPS.
 - Pure Rustls TLS stack with zero OpenSSL or native-TLS dependencies.
-
-## Install
-
-Install from crates.io:
-
-```sh
-cargo install www --locked
-```
-
-Or build and install from a checkout (requires Rust 1.88+):
-
-```sh
-just build
-just install "$HOME/.local"
-```
-
-Prebuilt release archives and packages are published on [GitHub Releases](https://github.com/nbari/www/releases) for Linux (`x86_64`, `i686`, and `aarch64` GNU archives; static `musl` archives and DEB/RPM packages on `x86_64` and `aarch64`), FreeBSD (`x86_64`, `i686`, `aarch64`), and macOS (`x86_64`, `aarch64`).
-
-## Quick start
-
-```sh
-www
-www -r /tmp -p 8080
-www --bind 127.0.0.1 -r ./public -p 8080
-www -q -r ./public
-```
 
 ## Options
 
@@ -63,6 +128,11 @@ www -q -r ./public
 
 ```sh
 www -s localhost -r ./public -p 8080
+```
+
+Open <https://localhost:8080/> in your browser. A certificate warning is expected because the certificate is self-signed; proceed only if you trust this local server. To test from a second terminal:
+
+```sh
 curl --insecure https://localhost:8080/
 ```
 
