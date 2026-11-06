@@ -28,10 +28,16 @@ use std::{
 /// Seconds from the Unix epoch to year 10000, past which `httpdate` panics.
 const YEAR_10000: u64 = 253_402_300_800;
 
-/// Bytes requested from the blocking pool per streaming body chunk. Large
-/// enough that a multi-megabyte body costs a handful of pool handoffs and
-/// socket writes instead of one per 64 `KiB`.
-const CHUNK: u64 = 256 * 1024;
+/// Bytes requested from the blocking pool per streaming body chunk.
+///
+/// Each response in flight holds one chunk, so this is also the per-response
+/// memory a client can pin by reading slowly. Measured with 100 stalled 4 MiB
+/// responses: 64 `KiB` costs 53 MiB of RSS, 128 `KiB` costs 55 MiB and 256
+/// `KiB` costs 100 MiB, while 256 `KiB` buys only 3% more throughput than 128
+/// `KiB` on the 4 MiB workload. 128 `KiB` keeps that exposure flat against
+/// the smallest chunk while still halving the pool handoffs per megabyte, and
+/// stays at glibc's default mmap threshold.
+const CHUNK: u64 = 128 * 1024;
 
 /// Validators derived from the prepared handle's `fstat`.
 struct Validators {

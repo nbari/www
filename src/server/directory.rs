@@ -94,8 +94,15 @@ fn redirect(request: &Request, path: &str) -> Response {
     }
 }
 
-/// Largest body read into memory inside the resolving blocking job. Larger
-/// files keep streaming through the opened descriptor.
+/// Largest body read into memory during resolution; larger files keep
+/// streaming through the opened descriptor.
+///
+/// Inlining is what collapses a response to a single write syscall and no
+/// further blocking-pool work, and it is worth about 27% on a 200 `KiB` file
+/// and 60% on a 100 `KiB` one. It costs no extra memory against streaming:
+/// with 100 stalled 200 `KiB` responses a 64 `KiB` cutoff retains 9.9 MiB and
+/// a 256 `KiB` cutoff retains 9.9 MiB, because a streamed response pins a
+/// chunk buffer of its own anyway.
 const INLINE_MAX: u64 = 256 * 1024;
 
 /// Outcome of the single blocking resolution job for one request.

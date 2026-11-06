@@ -2,7 +2,7 @@
 * Serve file responses directly instead of through `tower-http`'s `ServeDir`, keeping validators, RFC 9110 preconditions, byte ranges and header order byte-identical.
 * Collapse every per-request filesystem operation into a single resolution step and read bodies up to 256 KiB during it, removing one blocking-pool handoff per 64 KiB of body.
 * Resolve on the runtime thread while the filesystem is fast, falling back to the blocking pool for one second whenever a resolution exceeds 1 ms.
-* Stream larger bodies in 256 KiB chunks and report a truncated file as an error instead of a short but successful response.
+* Stream larger bodies in 128 KiB chunks, chosen by measurement to keep the memory a slow client can pin close to the smallest chunk size, and report a truncated file as an error instead of a short but successful response.
 * Drop validators instead of panicking when a file's modification time cannot be represented as an HTTP date.
 * Ignore an unsatisfiable or malformed `Range` when `If-Range` does not match, instead of answering `416`.
 * Cancel a queued chunk read when the client disconnects mid-response.
