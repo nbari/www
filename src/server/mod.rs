@@ -33,6 +33,8 @@ struct Files {
     root: PathBuf,
     protected: Option<Arc<fs::Protected>>,
     dispatch: Arc<directory::Dispatch>,
+    /// Ceiling on the memory streaming bodies may hold across all clients.
+    budget: Arc<file_response::BodyBudget>,
 }
 
 /// Build the HTTP service independently of CLI parsing and TLS transport.
@@ -111,6 +113,7 @@ async fn router_with_protected(
             root: canonical_root,
             protected,
             dispatch: Arc::new(directory::Dispatch::new()),
+            budget: Arc::new(file_response::BodyBudget::new(file_response::STREAM_BUDGET)),
         }))
         .layer(middleware::from_fn(log_request)))
 }

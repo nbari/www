@@ -9,6 +9,8 @@
 * Combine repeated `If-Match` and `If-None-Match` field lines, and treat a present-but-empty one as a list that nothing matches.
 * Return `500` instead of dropping the connection if a resolution panics.
 * Cancel a queued chunk read when the client disconnects mid-response.
+* Cap the memory streaming bodies may hold at 64 MiB in total, falling back to 16 KiB chunks past it so slow readers cannot pin memory in proportion to their connection count.
+* Cap concurrent inline resolutions at half the runtime workers so a filesystem that never answers cannot pin every worker.
 * Benchmark side by side against any prebuilt server with `--server LABEL=PATH`, isolate the load generator from the server's SMT siblings, and exclude samples with errors from published medians.
 
 ## 3.0.1

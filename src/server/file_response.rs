@@ -21,6 +21,10 @@ use std::{
     ops::RangeInclusive,
     path::Path,
     pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
     time::SystemTime,
 };
@@ -301,6 +305,71 @@ fn if_range_matches(values: &[&HeaderValue], validators: &Validators) -> bool {
     }
 }
 
+/// Smallest streaming chunk, used once the memory budget is exhausted. Small
+/// enough that many more responses fit, large enough to stay far from the
+/// per-chunk handoff cost that made 64 `KiB` the slowest setting measured.
+const MIN_CHUNK: u64 = 16 * 1024;
+
+/// Total bytes streaming bodies may hold across all connections.
+///
+/// A response in flight pins its chunk until the client reads it, so without
+/// a ceiling the memory a slow reader can hold grows with the number of
+/// connections. Beyond this, further bodies stream in [`MIN_CHUNK`] pieces
+/// instead: slower, but bounded. Nothing ever waits or fails on the budget.
+pub(super) const STREAM_BUDGET: u64 = 64 * 1024 * 1024;
+
+/// Tracks the bytes currently reserved by streaming bodies.
+#[derive(Debug)]
+pub(super) struct BodyBudget {
+    used: AtomicU64,
+    limit: u64,
+}
+
+impl BodyBudget {
+    pub(super) const fn new(limit: u64) -> Self {
+        Self {
+            used: AtomicU64::new(0),
+            limit,
+        }
+    }
+
+    /// Reserve a chunk for one body: the preferred size when it fits, else
+    /// the minimum, else the minimum unreserved so a request never fails for
+    /// want of budget.
+    fn acquire(&self, want: u64) -> (u64, u64) {
+        for size in [want, MIN_CHUNK] {
+            let mut used = self.used.load(Ordering::Acquire);
+            loop {
+                let next = used.saturating_add(size);
+                if next > self.limit {
+                    break;
+                }
+                match self.used.compare_exchange_weak(
+                    used,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return (size, size),
+                    Err(current) => used = current,
+                }
+            }
+        }
+        (MIN_CHUNK, 0)
+    }
+
+    fn release(&self, reserved: u64) {
+        if reserved > 0 {
+            self.used.fetch_sub(reserved, Ordering::AcqRel);
+        }
+    }
+
+    #[cfg(test)]
+    fn in_use(&self) -> u64 {
+        self.used.load(Ordering::Acquire)
+    }
+}
+
 /// The authorized bytes, either already in memory or still on the handle.
 enum Source {
     Inline(Bytes),
@@ -309,7 +378,7 @@ enum Source {
 
 impl Source {
     /// Build the body for `length` bytes starting at `offset`.
-    fn body(self, offset: u64, length: u64) -> Body {
+    fn body(self, offset: u64, length: u64, budget: &Arc<BodyBudget>) -> Body {
         match self {
             Self::Inline(bytes) => {
                 let start = usize::try_from(offset)
@@ -320,11 +389,17 @@ impl Source {
                     .min(bytes.len());
                 Body::from(bytes.slice(start..end))
             }
-            Self::Handle(file) => Body::new(FileBody {
-                state: FileState::Idle(file),
-                seek: (offset > 0).then_some(offset),
-                remaining: length,
-            }),
+            Self::Handle(file) => {
+                let (chunk, reserved) = budget.acquire(CHUNK.min(length.max(1)));
+                Body::new(FileBody {
+                    state: FileState::Idle(file),
+                    seek: (offset > 0).then_some(offset),
+                    remaining: length,
+                    chunk,
+                    reserved,
+                    budget: Arc::clone(budget),
+                })
+            }
         }
     }
 }
@@ -338,16 +413,20 @@ enum FileState {
     Done,
 }
 
-/// Streams a prepared handle in [`CHUNK`]-sized pieces, one blocking-pool
+/// Streams a prepared handle in `chunk`-sized pieces, one blocking-pool
 /// handoff per piece.
 struct FileBody {
     state: FileState,
     seek: Option<u64>,
     remaining: u64,
+    chunk: u64,
+    reserved: u64,
+    budget: Arc<BodyBudget>,
 }
 
 impl Drop for FileBody {
     fn drop(&mut self) {
+        self.budget.release(self.reserved);
         // A disconnected client leaves a queued chunk read behind. Aborting
         // keeps a worker from allocating and reading CHUNK bytes for a
         // response nobody will receive.
@@ -393,7 +472,7 @@ impl http_body::Body for FileBody {
                     if this.remaining == 0 {
                         return Poll::Ready(None);
                     }
-                    let want = this.remaining.min(CHUNK);
+                    let want = this.remaining.min(this.chunk);
                     let seek = this.seek.take();
                     this.state = FileState::Reading(tokio::task::spawn_blocking(move || {
                         read_chunk(file, seek, want)
@@ -413,7 +492,7 @@ impl http_body::Body for FileBody {
                         Ok(Err(error)) => return Poll::Ready(Some(Err(error))),
                         Err(error) => return Poll::Ready(Some(Err(io::Error::other(error)))),
                     };
-                    let want = this.remaining.min(CHUNK);
+                    let want = this.remaining.min(this.chunk);
                     let read = u64::try_from(buffer.len()).unwrap_or_default();
                     this.remaining = this.remaining.saturating_sub(read);
                     // A short read means `read_to_end` already hit EOF, so the
@@ -467,6 +546,7 @@ pub(super) fn serve(
     inline: Option<Vec<u8>>,
     original: &Path,
     request: &Request,
+    budget: &Arc<BodyBudget>,
 ) -> Response {
     let Opened { file, metadata } = opened;
     let size = metadata.len();
@@ -547,7 +627,7 @@ pub(super) fn serve(
     let body = if is_head {
         Body::empty()
     } else {
-        source.body(offset, length)
+        source.body(offset, length, budget)
     };
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -558,4 +638,152 @@ pub(super) fn serve(
     }
     target.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
     response
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::{BodyBudget, CHUNK, FileBody, FileState, MIN_CHUNK, STREAM_BUDGET, Source};
+    use http_body::Body as _;
+    use std::sync::Arc;
+    use std::{future::poll_fn, io, pin::Pin};
+
+    fn body_over(path: &std::path::Path, len: u64) -> Result<FileBody, io::Error> {
+        Ok(FileBody {
+            state: FileState::Idle(std::fs::File::open(path)?),
+            seek: None,
+            remaining: len,
+            chunk: CHUNK,
+            reserved: 0,
+            budget: Arc::new(BodyBudget::new(STREAM_BUDGET)),
+        })
+    }
+
+    async fn next_frame(body: &mut FileBody) -> Option<Result<axum::body::Bytes, io::Error>> {
+        poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx))
+            .await
+            .map(|frame| frame.map(|frame| frame.into_data().unwrap_or_default()))
+    }
+
+    /// A file that shrinks after its `Content-Length` was published can no
+    /// longer satisfy it. Ending the stream cleanly would make HTTP/2 deliver
+    /// a silently truncated `200`, so the body must surface an error instead.
+    #[tokio::test]
+    async fn a_file_that_shrinks_mid_stream_fails_instead_of_ending_cleanly()
+    -> Result<(), io::Error> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("shrinking.bin");
+        let len = CHUNK * 3;
+        std::fs::write(&path, vec![7_u8; usize::try_from(len).unwrap_or_default()])?;
+        let mut body = body_over(&path, len)?;
+
+        let first = next_frame(&mut body)
+            .await
+            .ok_or_else(|| io::Error::other("no first chunk"))??;
+        assert_eq!(u64::try_from(first.len()).unwrap_or_default(), CHUNK);
+
+        // Shrink the file below what the response already promised.
+        std::fs::File::options()
+            .write(true)
+            .open(&path)?
+            .set_len(1)?;
+
+        loop {
+            match next_frame(&mut body).await {
+                Some(Err(error)) => {
+                    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+                    return Ok(());
+                }
+                Some(Ok(chunk)) => assert!(
+                    !chunk.is_empty(),
+                    "an empty frame must not be emitted as data"
+                ),
+                None => {
+                    return Err(io::Error::other(
+                        "stream ended cleanly despite an unsatisfied Content-Length",
+                    ));
+                }
+            }
+        }
+    }
+
+    /// The ordinary path still yields exactly the promised bytes and then
+    /// ends, in `CHUNK`-sized pieces.
+    #[tokio::test]
+    async fn a_stable_file_yields_exactly_the_promised_bytes() -> Result<(), io::Error> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("stable.bin");
+        let len = CHUNK + 17;
+        std::fs::write(&path, vec![3_u8; usize::try_from(len).unwrap_or_default()])?;
+        let mut body = body_over(&path, len)?;
+
+        let mut total = 0_u64;
+        let mut chunks = 0_u32;
+        while let Some(chunk) = next_frame(&mut body).await {
+            total += u64::try_from(chunk?.len()).unwrap_or_default();
+            chunks += 1;
+        }
+        assert_eq!(total, len);
+        assert_eq!(chunks, 2, "a body of CHUNK + 17 bytes takes two reads");
+        Ok(())
+    }
+
+    /// The budget is what keeps slow readers from pinning memory in
+    /// proportion to the number of connections. Bodies past the ceiling keep
+    /// working, in smaller pieces, and every reservation comes back on drop.
+    #[tokio::test]
+    async fn the_stream_budget_caps_reservations_and_degrades_instead_of_failing()
+    -> Result<(), io::Error> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("budget.bin");
+        std::fs::write(
+            &path,
+            vec![1_u8; usize::try_from(CHUNK).unwrap_or_default()],
+        )?;
+
+        // A ceiling of two full chunks admits exactly two full-size bodies.
+        let budget = Arc::new(BodyBudget::new(CHUNK * 2));
+        let mut bodies = Vec::new();
+        for _ in 0..2 {
+            bodies.push(Source::Handle(std::fs::File::open(&path)?).body(0, CHUNK, &budget));
+        }
+        assert_eq!(budget.in_use(), CHUNK * 2);
+
+        // The next bodies fall back to the minimum chunk rather than failing.
+        for _ in 0..4 {
+            bodies.push(Source::Handle(std::fs::File::open(&path)?).body(0, CHUNK, &budget));
+        }
+        assert!(
+            budget.in_use() <= CHUNK * 2 + MIN_CHUNK * 4,
+            "reservations exceeded the ceiling: {}",
+            budget.in_use()
+        );
+
+        // Dropping every body returns the whole reservation.
+        drop(bodies);
+        assert_eq!(budget.in_use(), 0, "reservations leaked on drop");
+        Ok(())
+    }
+
+    /// A range body seeks once and then stops at the requested length rather
+    /// than running to end of file.
+    #[tokio::test]
+    async fn a_range_body_starts_at_the_offset_and_stops_at_the_length() -> Result<(), io::Error> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("range.bin");
+        std::fs::write(&path, b"0123456789")?;
+        let mut body = FileBody {
+            state: FileState::Idle(std::fs::File::open(&path)?),
+            seek: Some(2),
+            remaining: 4,
+            chunk: CHUNK,
+            reserved: 0,
+            budget: Arc::new(BodyBudget::new(STREAM_BUDGET)),
+        };
+        let chunk = next_frame(&mut body)
+            .await
+            .ok_or_else(|| io::Error::other("no chunk"))??;
+        assert_eq!(chunk.as_ref(), b"2345");
+        assert!(next_frame(&mut body).await.is_none());
+        Ok(())
+    }
 }

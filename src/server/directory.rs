@@ -434,7 +434,7 @@ pub(super) async fn serve(files: Arc<Files>, request: Request) -> Response {
             opened,
             inline,
             logical,
-        })) => file_response::serve(opened, inline, &logical, &request),
+        })) => file_response::serve(opened, inline, &logical, &request, &files.budget),
     }
 }
 
@@ -600,6 +600,9 @@ mod dispatch_tests {
             root: std::fs::canonicalize(root.path())?,
             protected: None,
             dispatch: Arc::new(Dispatch::with_limits(4, Duration::ZERO)),
+            budget: Arc::new(super::file_response::BodyBudget::new(
+                super::file_response::STREAM_BUDGET,
+            )),
         });
         assert!(files.dispatch.inline_allowed());
 

@@ -130,6 +130,37 @@ For a staging test, add `-k` to skip verification of its untrusted certificate, 
 
 To select a protocol explicitly, add `--http1.1` or `--http2` (if your curl build supports HTTP/2). Keep the domain in the URL so the client sends the expected TLS server name.
 
+## How files are read
+
+Serving a file is one filesystem step: the path is resolved, the handle is
+opened, and a body up to 256 KiB is read, all in a single operation. Bodies
+larger than that stream in 128 KiB chunks.
+
+That step normally runs directly on a runtime worker, because on a warm page
+cache the thread handoff costs more than the syscalls do. Two limits keep a
+slow filesystem from turning that into a stall:
+
+- At most half the runtime workers may be inside a filesystem operation at
+  once, so accepting connections, timers, ACME renewal and shutdown keep
+  running even against a mount that never answers. A single-worker runtime
+  therefore never reads inline, and always uses the blocking pool.
+- If any resolution takes longer than 1 ms, every resolution moves to the
+  blocking pool for the next second, then the fast path is retried with a
+  single probe.
+
+The effect scales with the number of workers. Serving a 1 KiB file, measured
+against 3.0.1 on the same host:
+
+| Server CPUs / workers | 3.0.1 | 3.1.0 | |
+|---|---|---|---|
+| 1 | 27,853 req/s | 43,379 req/s | 1.56x |
+| 2 | 49,205 req/s | 111,737 req/s | 2.27x |
+| 4 | 81,974 req/s | 230,465 req/s | 2.81x |
+
+Streaming bodies share a 64 MiB memory ceiling. Past it, further responses
+stream in 16 KiB chunks rather than waiting or failing, so the memory a set
+of slow readers can pin grows more slowly than the number of connections.
+
 ## Development and testing
 
 ```sh
